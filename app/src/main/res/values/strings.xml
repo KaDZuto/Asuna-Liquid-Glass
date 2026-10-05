@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Asuna</string>
+    <string name="app_name">Asuna Liquid Glass</string>
 
     <!-- Главный экран -->
     <string name="ptt_button_content_description">Удерживайте для записи голоса</string>

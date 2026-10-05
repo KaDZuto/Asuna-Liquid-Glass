@@ -32,7 +32,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.vectorheart.asuna"
+        applicationId = "com.vectorheart.asuna.liquidglass"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

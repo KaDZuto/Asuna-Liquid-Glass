@@ -108,6 +108,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+import com.vectorheart.asuna.ui.theme.LiquidGlassColors
+import com.vectorheart.asuna.ui.theme.liquidGlassBorder
+import com.vectorheart.asuna.ui.theme.liquidGlassCapsule
+import com.vectorheart.asuna.ui.theme.liquidGlassGlow
+import com.vectorheart.asuna.ui.theme.liquidGlassSurface
+
 enum class PttState { Idle, Listening, Thinking, Speaking }
 
 @EntryPoint
@@ -121,15 +127,6 @@ interface ChatScreenEntryPoint {
     fun sttEngine(): SttEngine
     fun tiltSensor(): TiltSensor
 }
-
-// Структура сообщения в чате
-private data class ChatMessage(
-    val id: Long,
-    val text: String,
-    val isUser: Boolean,
-    val timestamp: Long = System.currentTimeMillis(),
-    val status: String = "" // "" / "sending" / "error" / "tool"
-)
 
 // Ключи SharedPreferences
 private const val KEY_API_KEY      = "api_key"
@@ -530,50 +527,77 @@ fun ChatScreen(
                 .zIndex(10f)
         ) {
             if (isPickupMode && pickupScenario != null) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
-                    modifier = Modifier.padding(bottom = 6.dp)
+                Box(
+                    modifier = Modifier
+                        .padding(bottom = 6.dp)
+                        .liquidGlassCapsule(
+                            tintColor = LiquidGlassColors.RubyErrorTint,
+                            frostedAlpha = 0.85f,
+                            specularAlpha = 0.95f,
+                            borderWidth = 1.dp,
+                            glowColor = LiquidGlassColors.RubyErrorGlow,
+                            glowRadius = 8.dp,
+                            highlightColor = Color.White
+                        )
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = "❤️ Тренажёр: ${pickupScenario?.location} • ${pickupScenario?.personality?.label}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        color = Color(0xFFFFD4BD),
+                        fontWeight = FontWeight.Bold,
                         maxLines = 1
                     )
                 }
             }
 
             if (recognizedText.isNotEmpty() || pttState != PttState.Idle || statusMessage != null) {
-                Surface(
-                    shape = MaterialTheme.shapes.large,
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                    tonalElevation = 4.dp
+                val (indicator, stateColor) = when (pttState) {
+                    PttState.Idle -> ("OK" to LiquidGlassColors.WarmPeachGlow)
+                    PttState.Listening -> ("REC" to LiquidGlassColors.CyberCyanGlow)
+                    PttState.Thinking -> ("THINK" to LiquidGlassColors.AsunaLavenderGlow)
+                    PttState.Speaking -> ("SND" to Color(0xFFFFB300))
+                }
+                val isPulsing = pttState != PttState.Idle
+
+                Box(
+                    modifier = Modifier
+                        .liquidGlassCapsule(
+                            tintColor = LiquidGlassColors.ObsidianElevated,
+                            frostedAlpha = 0.82f,
+                            specularAlpha = 0.92f,
+                            borderWidth = 1.1.dp,
+                            glowColor = stateColor,
+                            glowRadius = if (isPulsing) 10.dp else 4.dp,
+                            sheenIntensity = 0.70f,
+                            highlightColor = Color.White,
+                            bounceColor = stateColor.copy(alpha = 0.45f)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val (indicator, stateColor) = when (pttState) {
-                            PttState.Idle -> ("OK" to MaterialTheme.colorScheme.outline)
-                            PttState.Listening -> ("REC" to MaterialTheme.colorScheme.tertiary)
-                            PttState.Thinking -> ("THINK" to MaterialTheme.colorScheme.primary)
-                            PttState.Speaking -> ("SND" to MaterialTheme.colorScheme.secondary)
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = stateColor,
-                            modifier = Modifier.padding(end = 8.dp)
+                        Box(
+                            modifier = Modifier
+                                .liquidGlassCapsule(
+                                    tintColor = stateColor,
+                                    frostedAlpha = 0.85f,
+                                    specularAlpha = 0.90f,
+                                    borderWidth = 0.8.dp,
+                                    glowColor = stateColor,
+                                    glowRadius = 4.dp
+                                )
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                indicator,
-                                color = MaterialTheme.colorScheme.surface,
+                                text = indicator,
+                                color = Color(0xFF1A0F1F),
                                 style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                fontWeight = FontWeight.Bold
                             )
                         }
+                        Spacer(Modifier.width(10.dp))
                         Text(
                             text = recognizedText.ifEmpty {
                                 statusMessage ?: when (pttState) {
@@ -584,7 +608,7 @@ fun ChatScreen(
                                 }
                             },
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = Color(0xFFF7EFE9),
                             maxLines = 1
                         )
                     }
@@ -592,27 +616,56 @@ fun ChatScreen(
             }
         }
 
-        // Кнопка истории чата (с бейджем)
+        // Кнопка истории чата (с бейджем в стиле Liquid Glass)
         if (chatLog.isNotEmpty()) {
-            FloatingActionButton(
-                onClick = { showChatSheet = true },
+            Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 12.dp, top = 80.dp)
+                    .padding(end = 14.dp, top = 80.dp)
+                    .size(48.dp)
+                    .liquidGlassSurface(
+                        shape = CircleShape,
+                        tintColor = LiquidGlassColors.WarmPeachTint,
+                        frostedAlpha = 0.75f,
+                        specularAlpha = 0.95f,
+                        borderWidth = 1.2.dp,
+                        glowColor = LiquidGlassColors.WarmPeachGlow,
+                        glowRadius = 8.dp,
+                        sheenIntensity = 0.7f,
+                        highlightColor = Color.White,
+                        bounceColor = LiquidGlassColors.WarmPeachBorder
+                    )
+                    .clickable { showChatSheet = true }
                     .zIndex(10f),
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                contentAlignment = Alignment.Center
             ) {
-                Badge(containerColor = MaterialTheme.colorScheme.tertiary) {
-                    Text("${chatLog.size}", fontSize = 10.sp)
+                Icon(
+                    imageVector = Icons.Default.Chat,
+                    contentDescription = "История чата",
+                    tint = LiquidGlassColors.WarmPeachGlow,
+                    modifier = Modifier.size(22.dp)
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 4.dp, end = 4.dp)
+                        .size(15.dp)
+                        .background(LiquidGlassColors.WarmPeachGlow, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "${chatLog.size}",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1A0F1F)
+                    )
                 }
             }
         }
 
-        // Нижняя панель управления
+        // Нижняя панель управления (Floating Capsule Dock)
         BottomBar(
             currentModel = currentAvatarModel,
-            isPickupMode = isPickupMode,
             onPttDown = {
                 if (!hasMicPermission) {
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -632,7 +685,8 @@ fun ChatScreen(
             onModelClick = { showModelSheet = true },
             onChatClick = { showChatSheet = true },
             onLocalModelsClick = { showLocalModelsSheet = true },
-            onTogglePickupMode = { togglePickupMode() },
+            pttState = pttState,
+            unreadCount = chatLog.size,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(20f)
@@ -724,7 +778,11 @@ fun ChatScreen(
                 onOpenMemorySheet = {
                     showSettingsSheet = false
                     showMemorySheet = true
-                }
+                },
+                isPickupMode = isPickupMode,
+                pickupScenario = pickupScenario,
+                onTogglePickupMode = { togglePickupMode() },
+                localModelManager = localModelManager
             )
         }
     }
@@ -917,47 +975,6 @@ private fun ChatSheetContent(
 }
 
 @Composable
-private fun ChatMessageBubble(msg: ChatMessage) {
-    val bgColor = when {
-        msg.status == "error" -> MaterialTheme.colorScheme.errorContainer
-        msg.status == "tool" -> MaterialTheme.colorScheme.tertiaryContainer
-        msg.isUser -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.secondaryContainer
-    }
-    val textColor = when {
-        msg.status == "error" -> MaterialTheme.colorScheme.onErrorContainer
-        msg.status == "tool" -> MaterialTheme.colorScheme.onTertiaryContainer
-        msg.isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-        else -> MaterialTheme.colorScheme.onSecondaryContainer
-    }
-    val align = if (msg.isUser) Alignment.End else Alignment.Start
-
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = if (msg.isUser) Alignment.CenterEnd else Alignment.CenterStart
-    ) {
-        Column(
-            modifier = Modifier
-                .background(bgColor, shape = RoundedCornerShape(10.dp))
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalAlignment = align
-        ) {
-            Text(
-                text = if (msg.isUser) "👤 Ты" else "🤖 Асуна",
-                style = MaterialTheme.typography.labelSmall,
-                color = textColor.copy(alpha = 0.7f),
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = msg.text,
-                style = MaterialTheme.typography.bodySmall,
-                color = textColor
-            )
-        }
-    }
-}
-
-@Composable
 private fun ModelSheetContent(
     currentModel: String,
     onModelSelect: (String) -> Unit
@@ -988,18 +1005,24 @@ private fun ModelSheetContent(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(44.dp)
-                                .background(
-                                    color = if (id == currentModel) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = RoundedCornerShape(8.dp)
+                                .liquidGlassSurface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    tintColor = if (id == currentModel) LiquidGlassColors.WarmPeachTint else LiquidGlassColors.ObsidianElevated,
+                                    frostedAlpha = if (id == currentModel) 0.85f else 0.50f,
+                                    specularAlpha = if (id == currentModel) 1.0f else 0.45f,
+                                    borderWidth = if (id == currentModel) 1.2.dp else 0.8.dp,
+                                    glowColor = if (id == currentModel) LiquidGlassColors.WarmPeachGlow else Color.Transparent,
+                                    glowRadius = if (id == currentModel) 8.dp else 0.dp,
+                                    sheenIntensity = if (id == currentModel) 0.70f else 0.35f,
+                                    highlightColor = Color.White,
+                                    bounceColor = if (id == currentModel) LiquidGlassColors.WarmPeachBorder else Color(0x33FFFFFF)
                                 )
                                 .clickable { onModelSelect(id) },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 id.removePrefix("asuna_"),
-                                color = if (id == currentModel) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (id == currentModel) Color(0xFFFFD4BD) else Color(0xFFE2D6CA),
                                 fontWeight = if (id == currentModel) FontWeight.Bold else FontWeight.Normal,
                                 fontSize = 13.sp
                             )
