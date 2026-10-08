@@ -1,6 +1,6 @@
 package com.vectorheart.asuna
 
-import com.vectorheart.asuna.localai.OnDeviceLlmEngine
+import com.vectorheart.asuna.localai.MediaPipeEngine
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -8,12 +8,12 @@ class OnDeviceContextAndModelTest {
 
     @Test
     fun `detectModelMaxTokens корректно определяет размер контекста из имени файла`() {
-        assertEquals(4096, OnDeviceLlmEngine.detectModelMaxTokens("Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task"))
-        assertEquals(1280, OnDeviceLlmEngine.detectModelMaxTokens("Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"))
-        assertEquals(1280, OnDeviceLlmEngine.detectModelMaxTokens("Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"))
-        assertEquals(4096, OnDeviceLlmEngine.detectModelMaxTokens("gemma-4-E2B-it-web.task"))
-        assertEquals(4096, OnDeviceLlmEngine.detectModelMaxTokens("Phi-4-mini-instruct_multi-prefill-seq_q8_ekv4096.task"))
-        assertEquals(2048, OnDeviceLlmEngine.detectModelMaxTokens("unknown_model.task"))
+        assertEquals(4096, MediaPipeEngine.detectModelMaxTokens("Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task"))
+        assertEquals(1280, MediaPipeEngine.detectModelMaxTokens("Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"))
+        assertEquals(1280, MediaPipeEngine.detectModelMaxTokens("Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"))
+        assertEquals(4096, MediaPipeEngine.detectModelMaxTokens("gemma-4-E2B-it-web.task"))
+        assertEquals(4096, MediaPipeEngine.detectModelMaxTokens("Phi-4-mini-instruct_multi-prefill-seq_q8_ekv4096.task"))
+        assertEquals(2048, MediaPipeEngine.detectModelMaxTokens("unknown_model.task"))
     }
 
     @Test

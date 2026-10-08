@@ -104,7 +104,7 @@ class LocalModelManager @Inject constructor(
 
     /**
      * Рекомендации для встроенного on-device инференса (MediaPipe GenAI / LiteRT, .task).
-     * Используются через OnDeviceLlmEngine — без Termux.
+     * Используются через MediaPipeEngine — без Termux.
      */
     val onDeviceRecommendations: List<ModelRecommendation> = listOf(
         ModelRecommendation(
@@ -303,7 +303,7 @@ class LocalModelManager @Inject constructor(
         }
 
         if (!modelPathOrFilename.isNullOrBlank()) {
-            val modelLimit = OnDeviceLlmEngine.detectModelMaxTokens(modelPathOrFilename)
+            val modelLimit = MediaPipeEngine.detectModelMaxTokens(modelPathOrFilename)
             if (modelLimit in 512..8192) return minOf(autoTokens, modelLimit)
         }
         return autoTokens
@@ -332,7 +332,7 @@ class LocalModelManager @Inject constructor(
         val mode = onDeviceContextMode
         val rawLimit = if (mode == "manual") onDeviceManualContext else calculateAutoContextTokens(modelPathOrFilename)
         if (!modelPathOrFilename.isNullOrBlank()) {
-            val modelLimit = OnDeviceLlmEngine.detectModelMaxTokens(modelPathOrFilename)
+            val modelLimit = MediaPipeEngine.detectModelMaxTokens(modelPathOrFilename)
             if (modelLimit in 512..8192) return minOf(rawLimit, modelLimit)
         }
         return rawLimit
@@ -500,7 +500,7 @@ class LocalModelManager @Inject constructor(
             sizeBytes = targetFile.length(),
             format = format,
             recommendedThreads = 4,
-            recommendedContext = OnDeviceLlmEngine.detectModelMaxTokens(rec.filename)
+            recommendedContext = MediaPipeEngine.detectModelMaxTokens(rec.filename)
         )
         val list = getImportedModels().toMutableList()
         list.removeAll { it.fileName == rec.filename }

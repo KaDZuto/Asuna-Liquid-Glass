@@ -2,7 +2,12 @@ package com.vectorheart.asuna.llm
 
 import android.content.Context
 import android.util.Log
-import com.vectorheart.asuna.localai.OnDeviceLlmEngine
+import com.vectorheart.asuna.localai.EngineFactory
+import com.vectorheart.asuna.localai.EngineSettings
+import com.vectorheart.asuna.localai.LiteRtLmEngine
+import com.vectorheart.asuna.localai.MediaPipeEngine
+import com.vectorheart.asuna.localai.OnDeviceEngine
+import com.vectorheart.asuna.localai.Turn
 import com.vectorheart.asuna.memory.MemoryManager
 import com.vectorheart.asuna.pickup.PickupMode
 import com.vectorheart.asuna.tools.ToolRegistry
@@ -30,13 +35,58 @@ class LlmRepository @Inject constructor(
     val llmClient: LlmClient,
     val toolRegistry: ToolRegistry,
     val memoryManager: MemoryManager,
-    val onDeviceLlmEngine: OnDeviceLlmEngine,
+    val mediaPipeEngine: MediaPipeEngine,
+    val liteRtLmEngine: LiteRtLmEngine,
     val localModelManager: com.vectorheart.asuna.localai.LocalModelManager
 ) {
     companion object {
         private const val TAG = "LlmRepository"
         const val MODE_COMPANION = "companion"
         const val MODE_PICKUP = "pickup"
+    }
+
+    /**
+     * Выбор движка по расширению файла (ТЗ Фаза 1, п. 3.2):
+     * `.litertlm` -> LiteRT-LM, `.task` -> MediaPipe, `.gguf` -> Termux-ветка,
+     * которую решает вызывающий выше по стеку.
+     * Держать оба движка открытыми нельзя — на 8 ГБ ОЗУ они не помещаются,
+     * поэтому используется ровно один.
+     */
+    fun resolveEngine(path: String?): OnDeviceEngine =
+        if (EngineFactory.isLiteRtLm(path)) liteRtLmEngine else mediaPipeEngine
+
+    /**
+     * Сброс диалога при смене модели или провайдера.
+     * MediaPipe умеет переоткрыть сессию, LiteRT-LM дешёвле закрыть целиком:
+     * следующий вызов всё равно пересоздаст Conversation.
+     */
+    fun resetOnDeviceDialog() {
+        try {
+            mediaPipeEngine.resetConversation()
+        } catch (e: Exception) {
+            Log.w(TAG, "resetConversation failed: ${e.message}")
+        }
+        try {
+            liteRtLmEngine.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "close LiteRT-LM failed: ${e.message}")
+        }
+    }
+
+    /** Настройки движка из локальных настроек контекста. */
+    private fun engineSettings(path: String): EngineSettings {
+        val prefs = context.getSharedPreferences("asuna_local", Context.MODE_PRIVATE)
+        return EngineSettings(
+            maxContextTokens = localModelManager.getEffectiveContextLimit(path),
+            temperature = 0.9,
+            topP = 0.95,
+            topK = 64,
+            maxOutputTokens = 320,
+            // По умолчанию CPU: GPU-бэкенд LiteRT-LM на Mali-G77 не проверен.
+            useGpu = prefs.getBoolean("use_gpu_backend", false),
+            speculativeDecoding = prefs.getBoolean("speculative_decoding", false),
+            enableThinking = false
+        )
     }
 
     var currentMode: String = MODE_COMPANION
@@ -178,22 +228,17 @@ class LlmRepository @Inject constructor(
         Log.d(TAG, "Calling LLM: '$userText' [mode=$currentMode, provider=$apiType, lite=$isLite]")
         val firstRaw = if (isOnDevice) {
             val path = model?.takeIf { it.isNotBlank() }
-                ?: throw IllegalArgumentException("Не выбрана on-device .task модель (Настройки → Локальные модели → On-Device)")
-            val effectiveContext = localModelManager.getEffectiveContextLimit(path)
-            onDeviceLlmEngine.ensureLoaded(path, maxTokens = effectiveContext)
-            // Если сессия пустая, а в логе чата уже есть реплики — подставляем краткий пересказ
-            if (history.isNotEmpty()) {
-                val recapLines = if (effectiveContext <= 1280) 3 else 6
-                val recap = history.takeLast(recapLines).joinToString("\n") { (role, content) ->
-                    (if (role == "user") "Пользователь: " else "Асуна: ") + content.replace(Regex("\\s+"), " ").take(if (effectiveContext <= 1280) 100 else 200)
-                }
-                onDeviceLlmEngine.primeWithContext("Краткий пересказ предыдущей беседы:\n$recap")
-            }
-            onDeviceLlmEngine.chat(
-                userText = userText,
-                systemPrompt = sysPrompt,
-                onPartial = onPartial
-            )
+                ?: throw IllegalArgumentException("Не выбрана on-device модель (Настройки → Локальные модели)")
+            val engine = resolveEngine(path)
+            engine.load(path, engineSettings(path))
+            // История восстанавливается один раз на диалог: MediaPipe — пересказом,
+            // LiteRT-LM — настоящими сообщениями (умеет initialMessages).
+            engine.reset(sysPrompt, history.map { (role, content) ->
+                Turn(content, role == "user")
+            })
+            val sb = StringBuilder()
+            engine.stream(userText).collect { sb.append(it); onPartial?.invoke(it) }
+            sb.toString()
         } else {
             llmClient.callLLM(
                 userMessage = userText,
@@ -225,11 +270,12 @@ class LlmRepository @Inject constructor(
 
             val followUpPrompt = "Результат работы инструмента ${tool.name}:\n$toolResult\n\nТеперь дай естественный ответ пользователю на русском языке с блоком <live2d> в конце."
             val finalRaw = if (isOnDevice) {
-                onDeviceLlmEngine.chat(
-                    userText = followUpPrompt,
-                    systemPrompt = "",
-                    onPartial = onPartial
-                )
+                // Продолжаем тот же диалог: reset() здесь не зовём, иначе
+                // потеряем историю и модель забудет, о чём шла речь.
+                val engine = resolveEngine(model)
+                val sb = StringBuilder()
+                engine.stream(followUpPrompt).collect { sb.append(it); onPartial?.invoke(it) }
+                sb.toString()
             } else {
                 llmClient.callLLM(
                     userMessage = followUpPrompt,
@@ -264,8 +310,9 @@ class LlmRepository @Inject constructor(
             val path = model?.takeIf { it.isNotBlank() }
                 ?: return memoryManager.summarizeLocally(history, "On-device модель не выбрана")
             return try {
-                val effectiveContext = localModelManager.getEffectiveContextLimit(path)
-                onDeviceLlmEngine.ensureLoaded(path, maxTokens = effectiveContext)
+                val engine = resolveEngine(path)
+                engine.load(path, engineSettings(path))
+                engine.reset("")
                 val lastLines = history.takeLast(14).joinToString("\n") { (role, text) ->
                     if (role == "user") "Пользователь: ${text.take(400)}" else "Асуна: ${text.take(400)}"
                 }
@@ -278,8 +325,10 @@ class LlmRepository @Inject constructor(
                     Диалог:
                     $lastLines
                 """.trimIndent()
-                val raw = onDeviceLlmEngine.chat(prompt, "")
-                memoryManager.saveSummaryRaw(raw)
+                val sb = StringBuilder()
+                engine.stream(prompt).collect { sb.append(it) }
+                val summary = sb.toString()
+                memoryManager.saveSummaryRaw(summary)
             } catch (e: Exception) {
                 Log.e(TAG, "On-device summarize failed: ${e.message}", e)
                 memoryManager.summarizeLocally(history, e.message ?: "Ошибка on-device")
@@ -294,11 +343,5 @@ class LlmRepository @Inject constructor(
             model = model,
             baseUrl = baseUrl
         )
-    }
-
-    /** Контекст on-device модели: системный промпт + запас на историю. */
-    private fun onDeviceContextLimit(sysPrompt: String): Int {
-        val sysTokens = if (sysPrompt.isBlank()) 0 else onDeviceLlmEngine.countTokens(sysPrompt)
-        return (maxOf(1024, sysTokens + 1024)).coerceAtMost(4096)
     }
 }

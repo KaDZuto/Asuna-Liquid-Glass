@@ -703,7 +703,7 @@ fun ChatScreen(
             SettingsSheetContent(
                 apiType = apiType,
                 onApiTypeChange = { newType ->
-                    if (newType != apiType) llmRepository.onDeviceLlmEngine.resetConversation()
+                    if (newType != apiType) llmRepository.resetOnDeviceDialog()
                     apiType = newType
                     // Умная авто-подстановка провайдеров
                     when (newType) {
@@ -814,7 +814,7 @@ fun ChatScreen(
                     modelPickerLauncher.launch(arrayOf("*/*", "application/octet-stream"))
                 },
                 onActivateOnDevice = {
-                    llmRepository.onDeviceLlmEngine.resetConversation()
+                    llmRepository.resetOnDeviceDialog()
                     val onDev = localModelManager.getOnDeviceModels().firstOrNull()
                     apiType = "local-ondevice"
                     baseUrl = ""
@@ -823,7 +823,7 @@ fun ChatScreen(
                     Toast.makeText(context, if (onDev != null) "On-Device модель: ${onDev.displayName}" else "Сначала импортируй .task модель", Toast.LENGTH_LONG).show()
                 },
                 onActivateModel = { m ->
-                    llmRepository.onDeviceLlmEngine.resetConversation()
+                    llmRepository.resetOnDeviceDialog()
                     if (m.format == "MediaPipeTask" || m.format == "LiteRT" || m.fileName.endsWith(".task") || m.fileName.endsWith(".litertlm")) {
                         apiType = "local-ondevice"
                         baseUrl = ""

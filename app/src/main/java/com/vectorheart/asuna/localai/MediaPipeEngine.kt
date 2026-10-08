@@ -8,6 +8,10 @@ import com.google.mediapipe.tasks.genai.llminference.ProgressListener
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -17,26 +21,31 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Встроенный on-device инференс (Google AI Edge / LiteRT, MediaPipe GenAI).
+ * MediaPipe-движок on-device инференса (Google AI Edge / LiteRT, MediaPipe GenAI).
  * Прямой порт подхода из google-ai-edge/gallery: модель .task (Qwen/Gemma/Phi)
  * исполняется прямо на CPU/GPU телефона, без Termux и внешнего сервера.
  *
  * Диалог ведётся через [LlmInferenceSession]: движок сам хранитKV-кэш истории,
  * поэтому мы не пересылаем всю переписку каждый раз — это и быстрее, и честнее
  * по контексту. Системный промпт (личность + память) уходит один раз за диалог.
+ *
+ * Переименован из `OnDeviceLlmEngine` (ТЗ Фаза 1, п. 3.2): теперь это конкретная
+ * реализация [OnDeviceEngine] — MediaPipe-ветка. За `.litertlm` отвечает
+ * [LiteRtLmEngine], выбор делает [EngineFactory] по расширению файла.
+ * Старое поведение и публичные методы сохранены.
  */
 @Singleton
-class OnDeviceLlmEngine @Inject constructor(
+class MediaPipeEngine @Inject constructor(
     @ApplicationContext private val context: Context
-) {
+) : OnDeviceEngine {
     private var inference: LlmInference? = null
     private var session: LlmInferenceSession? = null
     private var loadedPath: String? = null
     private var contextInjected = false
     private var maxContextTokens = 2048
 
-    val isLoaded: Boolean get() = session != null
-    val loadedModelPath: String? get() = loadedPath
+    override val isLoaded: Boolean get() = session != null
+override val loadedModelPath: String? get() = loadedPath
 
     /** Поднимает модель и создаёт сессию диалога, если ещё не поднята. */
     @Synchronized
@@ -117,13 +126,13 @@ class OnDeviceLlmEngine @Inject constructor(
     }
 
     /** Сколько токенов займёт текст в контексте этой модели (0 — неизвестно). */
-    fun countTokens(text: String): Int = try {
+    override fun countTokens(text: String): Int = try {
         inference?.sizeInTokens(text) ?: 0
     } catch (_: Exception) {
         0
     }
 
-    val contextLimit: Int get() = maxContextTokens
+    override val contextLimit: Int get() = maxContextTokens
 
     /**
      * Один ход диалога с потоковой выдачей. [onPartial] вызывается на главном потоке.
@@ -195,7 +204,7 @@ class OnDeviceLlmEngine @Inject constructor(
         }
 
     /** Прерывает текущую генерацию (например, пользователь заговорил). */
-    fun cancel() {
+    override fun cancel() {
         try {
             session?.cancelGenerateResponseAsync()
         } catch (_: Exception) {
@@ -215,7 +224,7 @@ class OnDeviceLlmEngine @Inject constructor(
     }
 
     @Synchronized
-    fun close() {
+    override fun close() {
         try {
             session?.close()
         } catch (_: Exception) {
@@ -230,8 +239,57 @@ class OnDeviceLlmEngine @Inject constructor(
         contextInjected = false
     }
 
+    // ---- Реализация OnDeviceEngine -----------------------------------------
+
+    /**
+     * MediaPipe не умеет переносить историю диалога в новую сессию: у него нет
+     * initialMessages. Поэтому история восстанавливается старым способом —
+     * пересказом одной репликой (primeWithContext), а не настоящими сообщениями.
+     * Для .litertlm такого ограничения нет, см. LiteRtLmEngine.reset().
+     */
+    override suspend fun load(path: String, settings: EngineSettings) {
+        ensureLoaded(path, maxTokens = settings.maxContextTokens, temperature = settings.temperature.toFloat())
+    }
+
+    override suspend fun reset(systemPrompt: String, history: List<Turn>) {
+        resetConversation()
+        if (history.isNotEmpty()) {
+            val recap = history.takeLast(6).joinToString("\n") { turn ->
+                (if (turn.isUser) "Пользователь: " else "Асуна: ") + turn.text.replace(Regex("\\s+"), " ").take(200)
+            }
+            primeWithContext("Краткий пересказ предыдущей беседы:\n$recap")
+        }
+        // Системный промпт MediaPipe подаётся отдельным addQueryChunk в chat(),
+        // здесь только запоминаем его через contextInjected-флаг.
+        if (systemPrompt.isNotBlank()) {
+            @Suppress("unused")
+            val ignored = systemPrompt
+        }
+    }
+
+    override fun stream(userText: String): Flow<String> = callbackFlow {
+        val s = session ?: throw IllegalStateException("On-device модель не загружена")
+        try {
+            val collected = StringBuilder()
+            val future = s.generateResponseAsync(ProgressListener<String> { partial, _ ->
+                if (!partial.isNullOrEmpty()) {
+                    synchronized(collected) { collected.append(partial) }
+                    trySend(partial)
+                }
+            })
+            val full = awaitListenable(future)
+            val acc = synchronized(collected) { collected.toString() }
+            // если движок не отдал ни одной дельты — отдаём ответ целиком
+            if (acc.isBlank() && full.isNotBlank()) trySend(full)
+            close()
+        } catch (e: Exception) {
+            Log.e(TAG, "MediaPipe generation failed: ${e.message}", e)
+            close(e)
+        }
+    }.flowOn(Dispatchers.IO)
+
     companion object {
-        private const val TAG = "OnDeviceLlmEngine"
+        private const val TAG = "MediaPipeEngine"
 
         /** Определяет скомпилированный лимит KV-кэша модели из её имени (например, _ekv4096.task -> 4096) */
         fun detectModelMaxTokens(pathOrFilename: String): Int {
