@@ -1,16 +1,23 @@
 [versions]
 agp = "9.3.2"
-kotlin = "2.0.21"
+# Kotlin 2.3.x — обязателен для LiteRT-LM: litertlm-android начиная с 0.17.0
+# собран Kotlin 2.4 (метаданные mv=2.4.0), а компилятор 2.0.21 читает максимум
+# до 2.1.0 и падает с "incompatible version of Kotlin". Проверено kotlinc.
+kotlin = "2.3.21"
 coreKtx = "1.13.1"
 lifecycle = "2.8.7"
 activityCompose = "1.9.3"
 composeBom = "2024.10.01"
 navigationCompose = "2.8.4"
-# Hilt 2.59 — первая версия с официальной поддержкой AGP 9.0
-# (https://github.com/google/dagger/releases, см. также google/dagger#5099)
-hilt = "2.59"
+# Hilt 2.60 — читает метаданные Kotlin 2.4, которые тянет litertlm-android 0.18.0.
+# На 2.59 сборка падала: "Provided Metadata instance has version 2.4.0,
+# while maximum supported version is 2.3.0".
+hilt = "2.60.1"
 hiltNavigationCompose = "1.2.0"
-ksp = "2.0.21-1.0.28"
+# KSP 2.3.x — standalone-версионирование, привязка к версии Kotlin 2.3.x
+ksp = "2.3.12"
+# LiteRT-LM для Android (официальный движок Google для .litertlm)
+litertlm = "0.18.0"
 kotlinxSerialization = "1.7.3"
 coroutines = "1.9.0"
 okhttp = "4.12.0"
@@ -103,6 +110,9 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 # STT
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "tasksGenai" }
+# LiteRT-LM (Android): официальный рантайм Google для моделей .litertlm.
+# Именно он нужен для Gemma 4 / Bonsai — MediaPipe tasks-genai их не открывает.
+litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore-ktx" }
 coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "coroutinesPlayServices" }

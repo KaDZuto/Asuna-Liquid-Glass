@@ -41,6 +41,12 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
 
+        // Только arm64-v8a: целевой телефон — Xiaomi Mi 11T. Без этого фильтра
+        // в APK попадает x86_64 из litertlm-android и tasks-genai.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+
         buildConfigField("String", "OPENROUTER_API_KEY", "\"${openRouterApiKey}\"")
     }
 
@@ -148,6 +154,9 @@ dependencies {
     // STT (Vosk + Android SpeechRecognizer fallback)
     implementation(libs.vosk.android)
     implementation(libs.tasks.genai)
+    // LiteRT-LM — движок для моделей .litertlm (Gemma 4, Bonsai).
+    // MediaPipe tasks-genai .task-файлы открывает, .litertlm — нет (ТЗ, Фаза 1).
+    implementation(libs.litertlm.android)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
     implementation(libs.coroutines.play.services)

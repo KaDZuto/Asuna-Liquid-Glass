@@ -54,6 +54,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Asuna">
 
+        <!-- LiteRT-LM: требование официальной документации для GPU-бэкенда.
+             Обязательны, иначе рантайм не найдёт Vulkan/OpenCL на устройстве. -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
