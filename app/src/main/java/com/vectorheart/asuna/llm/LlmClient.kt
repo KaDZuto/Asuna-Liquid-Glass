@@ -96,6 +96,9 @@ class LlmClient @Inject constructor(
         // Незакрытые теги (ответ оборвался по max_tokens) тоже прячем
         display = Regex("""<live2d>[\s\S]*$""").replace(display, "")
         display = Regex("""<tool>[\s\S]*$""").replace(display, "")
+        // Незакрытый <think>: хвост мыслей уходит в конец ответа — режем до конца,
+        // иначе пользователь видит «недописанные мысли модели» в чате.
+        display = Regex("""<think>[\s\S]*$""", RegexOption.IGNORE_CASE).replace(display, "")
         display = display.replace(Regex("""</?(live2d|tool|think)>""", RegexOption.IGNORE_CASE), "").trim()
 
         val finalAction = if (match == null || (action.expression == "F_NOMAL" && action.motion_group == "idle" && action.motion_index == 0 && action.head_x == 0f && action.head_y == 0f)) {

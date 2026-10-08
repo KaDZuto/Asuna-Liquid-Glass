@@ -71,7 +71,9 @@ object EmotionMotionEvaluator {
         }
 
         // 4. Бурный восторг / Радость
-        if (containsAny(lower, "ура", "супер", "прекрасно", "замечательно", "восторг", "класс!", "здорово!", "обожаю!", "ура!") ||
+        // "ура" проверяем по границам слова, иначе срабатывает внутри "дУРАК"
+        // и обидка-цундере уезжает в F_FUN_MAX вместо F_POUTY.
+        if (containsWord(lower, "ура") || containsAny(lower, "супер", "прекрасно", "замечательно", "восторг", "класс!", "здорово!", "обожаю!") ||
             (lower.contains("!") && containsAny(lower, "здорово", "рада", "отлично", "получилось", "класс"))) {
             return LlmClient.Action(
                 expression = "F_FUN_MAX",
@@ -86,7 +88,9 @@ object EmotionMotionEvaluator {
         }
 
         // 5. Удивление / Шок
-        if (containsAny(lower, "ого", "вау", "неужели", "правда?", "серьёзно?", "ничего себе", "не может быть", "вот это да", "ни фига", "да ладно") ||
+        // "ого"/"вау" — по границам слова: иначе "ого" срабатывает внутри "долгого".
+        if (containsWord(lower, "ого") || containsWord(lower, "вау") ||
+            containsAny(lower, "неужели", "правда?", "серьёзно?", "ничего себе", "не может быть", "вот это да", "ни фига", "да ладно") ||
             clean.endsWith("!?") || clean.endsWith("?!")) {
             return LlmClient.Action(
                 expression = if (lower.contains("шок") || lower.contains("не может быть")) "F_SHOCKED" else "F_SURPRISE",
@@ -157,7 +161,9 @@ object EmotionMotionEvaluator {
         }
 
         // 10. Любопытство / Вопрос
-        if (clean.endsWith("?") || containsAny(lower, "хм", "интересно", "почему", "думаю", "расскажи", "как думаешь", "а ты?")) {
+        // "хм" — по границам слова, иначе совпадёт внутри "схема", "техника".
+        if (clean.endsWith("?") || containsWord(lower, "хм") ||
+            containsAny(lower, "интересно", "почему", "думаю", "расскажи", "как думаешь", "а ты?")) {
             return LlmClient.Action(
                 expression = "F_CURIOUS",
                 motion_group = "idle",
@@ -205,4 +211,21 @@ object EmotionMotionEvaluator {
         }
         return false
     }
+
+    /**
+     * Проверка по границам слова: перед и после keyword не должно быть буквы.
+     * Нужна для коротких токенов, которые иначе сидят внутри других слов
+     * («ура» внутри «дурак», «ого» внутри «долгого», «хм» внутри «схема»).
+     * Знаки препинания и пробелы границами не считаются — «ура!» сработает.
+     */
+    private fun containsWord(text: String, keyword: String): Boolean =
+        wordBoundary(keyword).containsMatchIn(text)
+
+    private fun wordBoundary(keyword: String): Regex = synchronized(wordCache) {
+        wordCache.getOrPut(keyword) {
+            Regex("(?<![\\p{L}])${Regex.escape(keyword)}(?![\\p{L}])")
+        }
+    }
+
+    private val wordCache = mutableMapOf<String, Regex>()
 }
