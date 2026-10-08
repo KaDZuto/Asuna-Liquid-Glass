@@ -90,4 +90,74 @@ class LlmClientParseTest {
         assertNull(result.toolCall)
         assertEquals("Текст", result.display)
     }
+
+    /**
+     * Формат, на котором обучена адаптированная модель: одно поле expression,
+     * без motion/head/body. Такое обязано разбираться без потерь.
+     */
+    @Test
+    fun `обучающий формат — только expression, дефолты остальных полей`() {
+        val raw = """Ну наконец-то. Ты же весь день сидел над этим проектом, правда? <live2d>{"expression":"F_TEASING"}</live2d>"""
+        val result = client.parseResponse(raw)
+        assertEquals(
+            "Ну наконец-то. Ты же весь день сидел над этим проектом, правда?",
+            result.display
+        )
+        assertEquals("F_TEASING", result.action.expression)
+        // остальные поля — дефолты Action, приложение их не меняет
+        assertEquals("idle", result.action.motion_group)
+        assertEquals(0, result.action.motion_index)
+        assertEquals(0f, result.action.head_x)
+    }
+
+    /**
+     * Регрессия: список выражений в системном промпте и в риге должен совпадать.
+     * Раньше промпт предлагал F_FUN_WARM, которого в приложении нет, и не
+     * упоминал 10 выражений, которые риг умеет — модель просила бы лицо,
+     * которого не существует, и осталась бы с молчаливым лицом.
+     */
+    @Test
+    fun `в системном промпте нет выражений, которых не умеет приложение`() {
+        val prompt = LlmClient.BASE_SYSTEM_PROMPT
+        val rigKnows = listOf(
+            "F_NOMAL", "F_FUN", "F_FUN_HANIKAMI", "F_FUN_MAX", "F_FUN_SMILE",
+            "F_SAD", "F_SAD_CUTE", "F_SURPRISE", "F_SHOCKED", "F_ANGRY", "F_SLEEP",
+            "F_SHY", "F_ADORE", "F_CURIOUS", "F_TEASING", "F_PLAYFUL",
+            "F_POUTY", "F_GIGGLE", "F_WARM_SMILE"
+        )
+        val mentioned = Regex("F_[A-Z_]+").findAll(prompt).map { it.value }.toSet()
+        assertEquals(
+            "в промпте есть выражения, которых нет в риге",
+            emptySet<String>(),
+            mentioned - rigKnows.toSet()
+        )
+        for (e in rigKnows) {
+            assertTrue("выражение $e не упомянуто в промпте", prompt.contains(e))
+        }
+    }
+
+    /**
+     * Промпт просит одно поле expression. Если туда вернётся требование
+     * заполнять motion/head/body, обученная модель начнёт это выдумывать.
+     */
+    @Test
+    fun `промпт требует только поле expression`() {
+        val prompt = LlmClient.BASE_SYSTEM_PROMPT
+        assertTrue(prompt.contains("""{"expression":"F_WARM_SMILE"}"""))
+        for (field in listOf("motion_group\":", "head_x\":", "body_angle\":")) {
+            assertTrue(
+                "промпт не должен требовать поле $field",
+                !prompt.contains("\"$field")
+            )
+        }
+    }
+
+    /** Звёздочки запрещены полностью: промпт не должен показывать пример с ними. */
+    @Test
+    fun `в системном промпте нет примеров описаний в звёздочках`() {
+        assertTrue(
+            "в промпте есть пример описания действия в звёздочках",
+            !LlmClient.BASE_SYSTEM_PROMPT.contains("*улыб")
+        )
+    }
 }
