@@ -53,7 +53,28 @@ class LiteRtLmEngine @Inject constructor(
     private var conversation: Conversation? = null
     private var loadedPath: String? = null
     private var settings: EngineSettings = EngineSettings()
+
+    /**
+     * Ключ, с которым движок реально поднят: путь + значимые параметры
+     * [EngineSettings]. Нужен, чтобы не перечитывать модель на каждое
+     * сообщение — см. [load].
+     */
+    private var loadedKey: String? = null
     private var gpuDisabledByFailure = false
+
+    /**
+     * Разрядность весов загруженной модели, если её удалось прочитать.
+     *
+     * `.litertlm` — контейнер tflite-подграфов, и веса там бывают INT8, INT4
+     * и INT2. INT2 — это и есть троичные веса `{-a, 0, +a}`: они ложатся в
+     * него без потерь (проверено на официальном `Ternary-Bonsai-1.7B`,
+     * где коды ровно `{-1, 0, +1}`). Разные разрядности отличаются и
+     * качеством, и объёмом ОЗУ, поэтому движок сообщает, что именно открыл.
+     *
+     * `null`, если модель ещё не загружена или файл не читается.
+     */
+    var modelPrecision: LiteRtLmModelInspector.Info? = null
+        private set
 
     override val isLoaded: Boolean
         get() = conversation?.isAlive == true
@@ -80,6 +101,17 @@ class LiteRtLmEngine @Inject constructor(
     }
 
     override suspend fun load(path: String, settings: EngineSettings) = withContext(Dispatchers.Default) {
+        // LlmRepository зовёт load() на КАЖДОЕ сообщение. Подъём .litertlm стоит
+        // 10–60 секунд и держит гигабайты ОЗУ, поэтому повторный вызов с той же
+        // моделью и теми же параметрами обязан быть no-op — иначе диалог с
+        // LiteRT-LM был бы невозможен. Смена модели или настроек меняет ключ.
+        val key = loadKey(path, settings)
+        if (key == loadedKey && isLoaded) {
+            this@LiteRtLmEngine.settings = settings
+            Log.d(TAG, "LiteRT-LM уже загружена ($path), переиспользуем движок")
+            return@withContext
+        }
+
         close()
         this@LiteRtLmEngine.settings = settings
 
@@ -123,7 +155,13 @@ class LiteRtLmEngine @Inject constructor(
 
         engine = created
         loadedPath = path
-        Log.d(TAG, "LiteRT-LM loaded: $path ctx=${settings.maxContextTokens} gpu=${created.engineConfig.backend.name}")
+        loadedKey = key
+        modelPrecision = LiteRtLmModelInspector.inspect(path).takeIf { it.formatOk }
+        Log.d(
+            TAG,
+            "LiteRT-LM loaded: $path ctx=${settings.maxContextTokens} " +
+                "gpu=${created.engineConfig.backend.name} weights=${modelPrecision?.summary() ?: "не прочитаны"}"
+        )
         Unit
     }
 
@@ -201,6 +239,7 @@ class LiteRtLmEngine @Inject constructor(
         conversation = null
         engine = null
         loadedPath = null
+        modelPrecision = null
     }
 
     /** Первая строка исключения — её и показываем пользователю (ТЗ п. 3.5). */

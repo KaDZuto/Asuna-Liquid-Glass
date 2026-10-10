@@ -42,6 +42,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,13 +51,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vectorheart.asuna.localai.LiteRtLmModelInspector
 import com.vectorheart.asuna.localai.LocalModelManager
 import com.vectorheart.asuna.ui.theme.LiquidGlassColors
 import com.vectorheart.asuna.ui.theme.liquidGlassBorder
 import com.vectorheart.asuna.ui.theme.liquidGlassCapsule
 import com.vectorheart.asuna.ui.theme.liquidGlassGlow
 import com.vectorheart.asuna.ui.theme.liquidGlassSurface
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Local AI Models Modal Sheet styled with iOS 26 Liquid Glass design.
@@ -123,7 +127,7 @@ fun LocalModelsSheetContent(
         ) {
             Icon(Icons.Default.FolderOpen, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Импортировать модель (.gguf / .task)")
+            Text("Импортировать модель (.gguf / .task / .litertlm)")
         }
 
         Spacer(Modifier.height(14.dp))
@@ -149,7 +153,7 @@ fun LocalModelsSheetContent(
                     .padding(12.dp)
             ) {
                 Text(
-                    "Файлы моделей ещё не импортированы. Скачайте .gguf файл на телефон и нажмите кнопку выше.",
+                    "Файлы моделей ещё не импортированы. Скачайте .task или .litertlm модель на телефон и нажмите кнопку выше.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFFC9BCB0)
                 )
@@ -184,10 +188,32 @@ fun LocalModelsSheetContent(
                                     fontSize = 12.sp,
                                     color = Color(0xFFC9BCB0)
                                 )
+                                // Разрядность весов читаем из самого .litertlm:
+                                // INT2 — это троичные {-a,0,+a} (вдвое меньше
+                                // INT4, но заметно грубее), и пользователю
+                                // полезно видеть, что он запустил. Файл на
+                                // сотни МБ, поэтому читаем не в UI-потоке.
+                                val weights by produceState<String?>(null, m.filePath) {
+                                    value = withContext(Dispatchers.IO) { weightLabel(m) }
+                                }
+                                val weightsLabel = weights
+                                if (weightsLabel != null) {
+                                    Text(
+                                        weightsLabel,
+                                        fontSize = 11.sp,
+                                        color = Color(0xFFB0C4DE)
+                                    )
+                                }
                                 Spacer(Modifier.height(6.dp))
                                 OutlinedButton(onClick = { onActivateModel(m) }) {
                                     Text(
-                                        if (m.format == "MediaPipeTask" || m.format == "LiteRT") "🧩 В чате (On-Device)" else "📱 В чате (Termux)",
+                                        when {
+                                            m.fileName.endsWith(".litertlm", ignoreCase = true) ->
+                                                "🧩 В чате (LiteRT-LM)"
+                                            m.format == "MediaPipeTask" || m.format == "LiteRT" ->
+                                                "🧩 В чате (On-Device)"
+                                            else -> "📱 В чате (Termux)"
+                                        },
                                         fontSize = 11.sp
                                     )
                                 }
@@ -433,6 +459,97 @@ fun LocalModelsSheetContent(
 
         Spacer(Modifier.height(16.dp))
 
+        // ================= Section: LiteRT-LM (.litertlm) Glass Card =================
+        // Настройки нужны только движку LiteRT-LM, поэтому карточка появляется,
+        // когда в списке есть хотя бы одна .litertlm-модель.
+        if (importedModels.any { it.fileName.endsWith(".litertlm", ignoreCase = true) }) {
+            var useGpu by remember { mutableStateOf(localModelManager.useLiteRtLmGpu) }
+            var speculative by remember { mutableStateOf(localModelManager.useLiteRtLmSpeculative) }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(20.dp),
+                        tintColor = LiquidGlassColors.NeonMintTint,
+                        frostedAlpha = 0.68f,
+                        specularAlpha = 0.92f,
+                        borderWidth = 1.2.dp,
+                        glowColor = LiquidGlassColors.NeonMintGlow,
+                        glowRadius = 6.dp,
+                        sheenIntensity = 0.65f,
+                        highlightColor = Color.White,
+                        bounceColor = LiquidGlassColors.NeonMintBorder.copy(alpha = 0.4f)
+                    )
+                    .padding(14.dp)
+            ) {
+                Column {
+                    Text(
+                        "🧠 Движок LiteRT-LM (.litertlm)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = LiquidGlassColors.NeonMintGlow
+                    )
+                    Text(
+                        "Эти два переключателя действуют только на .litertlm-модели. " +
+                            "При смене настройки модель перезагрузится при следующем сообщении.",
+                        fontSize = 11.sp,
+                        color = Color(0xFFB0C4DE)
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("GPU-бэкенд", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFF5EBE0))
+                            Text(
+                                "Быстрее, но на Mali-G77 не проверен. Если движок не поднимется, он сам вернётся на CPU.",
+                                fontSize = 10.sp,
+                                color = Color(0xFFB0C4DE)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = useGpu,
+                            onCheckedChange = {
+                                useGpu = it
+                                localModelManager.useLiteRtLmGpu = it
+                            }
+                        )
+                    }
+
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Спекулятивное декодирование", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFF5EBE0))
+                            Text(
+                                "Ускоряет генерацию, но требует модель, собранную после 5 мая 2026. Если ответы станут странными — выключи.",
+                                fontSize = 10.sp,
+                                color = Color(0xFFB0C4DE)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = speculative,
+                            onCheckedChange = {
+                                speculative = it
+                                localModelManager.useLiteRtLmSpeculative = it
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+        }
+
         // ================= Section: Download Direct Glass Card =================
         Text("⬇ Скачать модель прямо из приложения", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFFF7EFE9))
         val freeBytes = localModelManager.freeDiskBytes()
@@ -629,4 +746,26 @@ fun LocalModelsSheetContent(
             }
         }
     }
+}
+
+/**
+ * Короткая подпись о разрядности весов `.litertlm` — или `null`, если это не
+ * LiteRT-LM-модель либо файл не читается.
+ *
+ * Троичные веса `{-a, 0, +a}` лежат в `.litertlm` как `INT2` (2 бита на вес,
+ * без потерь — три уровня кодируются кодами `{-1, 0, +1}`), а обычные
+ * 4-битные — как `INT4`. Разница вдвое и по размеру, и по качеству, поэтому
+ * показываем её явно.
+ */
+private fun weightLabel(m: LocalModelManager.ImportedModel): String? {
+    if (!m.fileName.endsWith(".litertlm", ignoreCase = true)) return null
+    val info = LiteRtLmModelInspector.inspect(m.filePath)
+    if (!info.formatOk || info.weightTypes.isEmpty()) return null
+    val hint = when {
+        info.hasInt2Weights && !info.hasInt4Weights -> "троичные"
+        info.hasInt2Weights -> "троичные + 4-битные"
+        info.hasInt4Weights -> "4-битные"
+        else -> null
+    }
+    return if (hint != null) "Веса: ${info.weightTypes.joinToString(", ")} — $hint" else null
 }
