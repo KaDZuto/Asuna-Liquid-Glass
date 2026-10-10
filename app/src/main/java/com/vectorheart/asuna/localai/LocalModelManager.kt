@@ -116,6 +116,26 @@ class LocalModelManager @Inject constructor(
      */
     val onDeviceRecommendations: List<ModelRecommendation> = listOf(
         ModelRecommendation(
+            title = "Bonsai 1.7B (1-Bit REAL) — LiteRT-LM",
+            filename = "bonsai-1.7b-int1-REAL.litertlm",
+            sizeFormatted = "525 МБ",
+            ramUsage = "~0.9 ГБ RAM",
+            speedMi11T = "35-50 ток/сек (сверхбыстрая)",
+            huggingFaceUrl = "https://huggingface.co/litert-community/1Bit-Bonsai-1.7B-PoC",
+            description = "Экспериментальная 1-битная модель Bonsai 1.7B (на базе Qwen3). Экстремально компактная, сверхбыстрая генерация и минимальное потребление батареи.",
+            downloadUrl = "https://huggingface.co/litert-community/1Bit-Bonsai-1.7B-PoC/resolve/main/bonsai-1.7b-int1-REAL.litertlm"
+        ),
+        ModelRecommendation(
+            title = "Ternary Bonsai 1.7B (INT2 GPU 4K) — LiteRT-LM",
+            filename = "bonsai-1.7b-int2pc-4k-gpu.litertlm",
+            sizeFormatted = "730 МБ",
+            ramUsage = "~1.2 ГБ RAM",
+            speedMi11T = "30-45 ток/сек (быстро и точно)",
+            huggingFaceUrl = "https://huggingface.co/litert-community/Ternary-Bonsai-1.7B",
+            description = "Официальная троичная (INT2) модель Bonsai 1.7B с поддержкой GPU и контекстом 4k. Максимальное качество при минимальном весе.",
+            downloadUrl = "https://huggingface.co/litert-community/Ternary-Bonsai-1.7B/resolve/main/bonsai-1.7b-int2pc-4k-gpu.litertlm"
+        ),
+        ModelRecommendation(
             title = "Qwen3 0.6B — LiteRT-LM, сборка под Dimensity 1200",
             filename = "Qwen3-0.6B.mediatek.mt6993.litertlm",
             sizeFormatted = "1.12 ГБ",
