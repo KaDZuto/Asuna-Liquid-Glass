@@ -73,18 +73,31 @@ class LlmRepository @Inject constructor(
         }
     }
 
+    /**
+     * Реакция на нехватку памяти от системы. LiteRT-LM держит веса и KV-кэш
+     * в нативной памяти, поэтому на TRIM_MEMORY_RUNNING_LOW движок закрывается
+     * целиком и поднимется заново при следующем сообщении.
+     */
+    fun onTrimMemory(level: Int) {
+        try {
+            liteRtLmEngine.onTrimMemory(level)
+        } catch (e: Exception) {
+            Log.w(TAG, "LiteRT-LM onTrimMemory failed: ${e.message}")
+        }
+    }
+
     /** Настройки движка из локальных настроек контекста. */
     private fun engineSettings(path: String): EngineSettings {
-        val prefs = context.getSharedPreferences("asuna_local", Context.MODE_PRIVATE)
+        val manager = localModelManager
         return EngineSettings(
-            maxContextTokens = localModelManager.getEffectiveContextLimit(path),
+            maxContextTokens = manager.getEffectiveContextLimit(path),
             temperature = 0.9,
             topP = 0.95,
             topK = 64,
             maxOutputTokens = 320,
             // По умолчанию CPU: GPU-бэкенд LiteRT-LM на Mali-G77 не проверен.
-            useGpu = prefs.getBoolean("use_gpu_backend", false),
-            speculativeDecoding = prefs.getBoolean("speculative_decoding", false),
+            useGpu = manager.useLiteRtLmGpu,
+            speculativeDecoding = manager.useLiteRtLmSpeculative,
             enableThinking = false
         )
     }

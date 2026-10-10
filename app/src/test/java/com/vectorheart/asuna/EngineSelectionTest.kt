@@ -59,4 +59,25 @@ class EngineSelectionTest {
         assertEquals(4096, MediaPipeEngine.detectModelMaxTokens("gemma-4-E2B-it-web.task"))
         assertEquals(2048, MediaPipeEngine.detectModelMaxTokens("unknown_model.task"))
     }
+
+    @Test
+    fun `litertlm не должен попадать в парсер имён MediaPipe`() {
+        // В имени .litertlm нет маркера _ekvNNNN — это конструкция MediaPipe.
+        // Парсер для неизвестного имени возвращает 2048 «по умолчанию», то есть
+        // выдумывает лимит, которого у .litertlm нет. Поэтому LocalModelManager
+        // отсекает .litertlm ДО вызова парсера (modelContextLimit).
+        //
+        // Здесь фиксируем, что парсер на таких именах выдаёт именно выдумку,
+        // и что формат при этом остаётся разным:
+        assertEquals(4096, MediaPipeEngine.detectModelMaxTokens("gemma-4-E2B-it.litertlm"))
+        assertEquals(2048, MediaPipeEngine.detectModelMaxTokens("Qwen3-0.6B.mediatek.mt6993.litertlm"))
+        // Регрессия на маршрутизацию: .litertlm обязан уходить в LiteRT-LM,
+        // иначе обрезка по имени применится не к тому движку.
+        assertTrue(EngineFactory.isLiteRtLm("gemma-4-E2B-it.litertlm"))
+        assertTrue(EngineFactory.isLiteRtLm("Qwen3-0.6B.mediatek.mt6993.litertlm"))
+        assertEquals(
+            EngineRuntime.MEDIAPIPE_TASK,
+            EngineFactory.runtimeFor("gemma-4-E2B-it-web.task")
+        )
+    }
 }

@@ -730,7 +730,7 @@ fun ChatScreen(
                             baseUrl = ""
                             val onDev = localModelManager.getOnDeviceModels().firstOrNull()
                             model = onDev?.filePath
-                            Toast.makeText(context, if (onDev != null) "On-Device: ${onDev.displayName}" else "Нет on-device моделей: скачай .task в Локальных моделях", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, if (onDev != null) "On-Device: ${onDev.displayName}" else "Нет on-device моделей: скачай .task или .litertlm в Локальных моделях", Toast.LENGTH_LONG).show()
                         }
                         "anthropic" -> {
                             baseUrl = "https://api.anthropic.com/v1"
@@ -820,7 +820,7 @@ fun ChatScreen(
                     baseUrl = ""
                     model = onDev?.filePath
                     showLocalModelsSheet = false
-                    Toast.makeText(context, if (onDev != null) "On-Device модель: ${onDev.displayName}" else "Сначала импортируй .task модель", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, if (onDev != null) "On-Device модель: ${onDev.displayName}" else "Сначала импортируй .task или .litertlm модель", Toast.LENGTH_LONG).show()
                 },
                 onActivateModel = { m ->
                     llmRepository.resetOnDeviceDialog()

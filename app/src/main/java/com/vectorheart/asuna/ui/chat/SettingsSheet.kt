@@ -160,7 +160,7 @@ fun SettingsSheetContent(
                     "deepseek" to "🐋 DeepSeek V3/R1",
                     "antigravity-bridge" to "⚡ Antigravity CLI (ПК)",
                     "local-termux" to "📱 Офлайн (Mi 11T / Termux)",
-                    "local-ondevice" to "🧩 On-Device (LiteRT .task)",
+                    "local-ondevice" to "🧩 On-Device (.task / .litertlm)",
                     "openai" to "OpenAI (GPT-4o)",
                     "anthropic" to "Anthropic (Claude)"
                 )

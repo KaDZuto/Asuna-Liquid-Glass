@@ -105,8 +105,46 @@ class LocalModelManager @Inject constructor(
     /**
      * Рекомендации для встроенного on-device инференса (MediaPipe GenAI / LiteRT, .task).
      * Используются через MediaPipeEngine — без Termux.
+     *
+     * Сверху идут `.litertlm` — их открывает только LiteRT-LM ([LiteRtLmEngine]).
+     * Ссылки и размеры сверены с HF API (файл `size` в байтах):
+     *  - `Qwen3-0.6B.mediatek.mt6993.litertlm` — 1 202 913 280 Б: сборка под
+     *    MediaTek MT6993, то есть ровно под Dimensity 1200 (Mi 11T)
+     *  - `Qwen3-0.6B.litertlm` — 614 236 160 Б: универсальный CPU-вариант
+     *  - `gemma-4-E2B-it.litertlm` — 2 588 147 712 Б: та же Gemma 4, что и .task
+     *    ниже, но в родном для LiteRT-LM формате
      */
     val onDeviceRecommendations: List<ModelRecommendation> = listOf(
+        ModelRecommendation(
+            title = "Qwen3 0.6B — LiteRT-LM, сборка под Dimensity 1200",
+            filename = "Qwen3-0.6B.mediatek.mt6993.litertlm",
+            sizeFormatted = "1.12 ГБ",
+            ramUsage = "~1.8 ГБ RAM",
+            speedMi11T = "25-35 ток/сек (очень шустро)",
+            huggingFaceUrl = "https://huggingface.co/litert-community/Qwen3-0.6B",
+            description = "Собран под MediaTek MT6993 — это именно Dimensity 1200 из Mi 11T. Лучший выбор для быстрого живого диалога.",
+            downloadUrl = "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B.mediatek.mt6993.litertlm"
+        ),
+        ModelRecommendation(
+            title = "Qwen3 0.6B — LiteRT-LM, универсальный (CPU)",
+            filename = "Qwen3-0.6B.litertlm",
+            sizeFormatted = "586 МБ",
+            ramUsage = "~1.0 ГБ RAM",
+            speedMi11T = "28-40 ток/сек (летает)",
+            huggingFaceUrl = "https://huggingface.co/litert-community/Qwen3-0.6B",
+            description = "Самая лёгкая LiteRT-LM модель: 4-битные веса, минимум RAM и нагрева. Подходит и для режима Lite LLM.",
+            downloadUrl = "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B.litertlm"
+        ),
+        ModelRecommendation(
+            title = "Gemma 4 E2B IT — LiteRT-LM (.litertlm)",
+            filename = "gemma-4-E2B-it.litertlm",
+            sizeFormatted = "2.41 ГБ",
+            ramUsage = "~3.2 ГБ RAM",
+            speedMi11T = "14-24 ток/сек",
+            huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm",
+            description = "Та же Gemma 4 E2B, что и .task ниже, но в формате .litertlm — с настоящей историей диалога и без пересказов. На странице есть и -gpu сборка.",
+            downloadUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+        ),
         ModelRecommendation(
             title = "Gemma 4 E2B IT — LiteRT (без логина)",
             filename = "gemma-4-E2B-it-web.task",
@@ -302,12 +340,12 @@ class LocalModelManager @Inject constructor(
             else           -> 1024
         }
 
-        if (!modelPathOrFilename.isNullOrBlank()) {
-            val modelLimit = MediaPipeEngine.detectModelMaxTokens(modelPathOrFilename)
-            if (modelLimit in 512..8192) return minOf(autoTokens, modelLimit)
-        }
+        val modelLimit = EngineFactory.contextLimitFromName(modelPathOrFilename)
+        if (modelLimit in 512..8192) return minOf(autoTokens, modelLimit)
         return autoTokens
     }
+
+    
 
     /** Режим выбора контекста: "auto" (по RAM) или "manual" (фиксированный). */
     var onDeviceContextMode: String
@@ -331,10 +369,8 @@ class LocalModelManager @Inject constructor(
     fun getEffectiveContextLimit(modelPathOrFilename: String? = null): Int {
         val mode = onDeviceContextMode
         val rawLimit = if (mode == "manual") onDeviceManualContext else calculateAutoContextTokens(modelPathOrFilename)
-        if (!modelPathOrFilename.isNullOrBlank()) {
-            val modelLimit = MediaPipeEngine.detectModelMaxTokens(modelPathOrFilename)
-            if (modelLimit in 512..8192) return minOf(rawLimit, modelLimit)
-        }
+        val modelLimit = EngineFactory.contextLimitFromName(modelPathOrFilename)
+        if (modelLimit in 512..8192) return minOf(rawLimit, modelLimit)
         return rawLimit
     }
 
@@ -346,6 +382,31 @@ class LocalModelManager @Inject constructor(
             context.getSharedPreferences("asuna_local", Context.MODE_PRIVATE)
                 .edit().putBoolean("lite_llm_mode", value).apply()
         }
+
+    /**
+     * GPU-бэкенд LiteRT-LM. Читается в [LiteRtLmEngine.load]; при ошибке
+     * `initialize()` движок сам уходит на CPU и запоминает это до перезапуска,
+     * поэтому включать имеет смысл только после собственной проверки.
+     */
+    var useLiteRtLmGpu: Boolean
+        get() = context.getSharedPreferences("asuna_local", Context.MODE_PRIVATE)
+            .getBoolean("use_gpu_backend", false)
+        set(value) {
+            context.getSharedPreferences("asuna_local", Context.MODE_PRIVATE)
+                .edit().putBoolean("use_gpu_backend", value).apply()
+        }
+
+    /**
+     * Спекулятивное декодирование LiteRT-LM. Выигрыш в основном на GPU, поэтому
+     * по умолчанию выключено (ТЗ п. 3.4).
+     */
+    var useLiteRtLmSpeculative: Boolean
+        get() = context.getSharedPreferences("asuna_local", Context.MODE_PRIVATE)
+            .getBoolean("speculative_decoding", false)
+        set(value) {
+            context.getSharedPreferences("asuna_local", Context.MODE_PRIVATE)
+                .edit().putBoolean("speculative_decoding", value).apply()
+    }
 
     /** Проверяет валидность токена HuggingFace через api/whoami-v2. */
     suspend fun verifyHfToken(token: String): Result<String> = withContext(Dispatchers.IO) {
@@ -500,7 +561,7 @@ class LocalModelManager @Inject constructor(
             sizeBytes = targetFile.length(),
             format = format,
             recommendedThreads = 4,
-            recommendedContext = MediaPipeEngine.detectModelMaxTokens(rec.filename)
+            recommendedContext = EngineFactory.contextLimitFromName(rec.filename)
         )
         val list = getImportedModels().toMutableList()
         list.removeAll { it.fileName == rec.filename }

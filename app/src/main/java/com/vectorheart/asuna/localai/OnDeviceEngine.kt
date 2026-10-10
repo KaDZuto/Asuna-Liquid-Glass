@@ -88,7 +88,67 @@ enum class EngineRuntime {
     GGUF_TERMUX      // .gguf    — внешний llama.cpp в Termux
 }
 
+/**
+ * Обрезает историю диалога под остаток контекстного окна.
+ *
+ * Нужна LiteRT-LM: она получает настоящие сообщения (см. `ConversationConfig
+ * .initialMessages`), то есть весь лог чата, а не пересказ. Без обрезки длинная
+ * беседа либо вылезает за `maxNumTokens`, либо модель упирается в prefill — на
+ * Mi 11T это секунды ожидания перед каждым ответом.
+ *
+ * Режем с конца по целым парам «реплика пользователя + ответ», чтобы диалог не
+ * начинался с ответа Асуны. Оценка длины — [CHARS_PER_TOKEN] символов на токен,
+ * та же, что в `LiteRtLmEngine.countTokens`.
+ */
+const val CHARS_PER_TOKEN = 2.6f
+
+/** Оценка длины текста в токенах для русского текста. */
+fun estimateTokens(text: String): Int = (text.length / CHARS_PER_TOKEN).toInt() + 1
+
+/**
+ * Возвращает хвост истории, который влезает в [budgetTokens], сохраняя парность
+ * «пользователь → модель». Пустой бюджет означает пустую историю.
+ */
+fun fitHistoryToBudget(history: List<Turn>, budgetTokens: Int): List<Turn> {
+    if (history.isEmpty()) return history
+    if (budgetTokens <= 0) return emptyList()
+
+    var used = 0
+    val kept = ArrayDeque<Turn>()
+    for (turn in history.asReversed()) {
+        val cost = estimateTokens(turn.text)
+        if (used + cost > budgetTokens) break
+        used += cost
+        kept.addFirst(turn)
+    }
+    // Обрезка может остановиться посередине пары. Убираем только самую старую
+    // реплику, если это ответ модели: диалог должен начинаться с вопроса.
+    // Внутренние пары при этом не трогаем.
+    if (kept.isNotEmpty() && !kept.first().isUser) kept.removeFirst()
+    return kept.toList()
+}
+
 object EngineFactory {
+
+    /**
+     * Скомпилированный лимит контекста модели, если он зашит в имя файла.
+     *
+     * Разбирать имя умеет только MediaPipe: `_ekv1280.task` — это метка в
+     * имени, которую MediaPipe tasks-genai пишет при конвертации.
+     *
+     * Для `.litertlm` такого маркера нет: окно задаётся числом
+     * (`EngineConfig.maxNumTokens`), и движок не падает на слишком большом
+     * значении. Возвращать сюда выдумку `detectModelMaxTokens` нельзя — она
+     * отдаёт 2048 для любого неизвестного имени, и контекст Gemma 4 (32k)
+     * молча урезался бы в 16 раз.
+     *
+     * `0` означает «лимита нет, ограничивать нечем».
+     */
+    fun contextLimitFromName(pathOrFilename: String?): Int {
+        if (pathOrFilename.isNullOrBlank()) return 0
+        if (runtimeFor(pathOrFilename) != EngineRuntime.MEDIAPIPE_TASK) return 0
+        return MediaPipeEngine.detectModelMaxTokens(pathOrFilename)
+    }
 
     /**
      * Выбор движка по расширению файла.

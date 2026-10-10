@@ -96,8 +96,7 @@ class LiteRtLmEngine @Inject constructor(
         }
         if (used == 0) return 0
         // грубая оценка добавляемых токенов: ~2.6 символа на токен для русского
-        val estimate = (text.length / 2.6).toInt()
-        return used + estimate
+        return used + estimateTokens(text)
     }
 
     override suspend fun load(path: String, settings: EngineSettings) = withContext(Dispatchers.Default) {
@@ -106,7 +105,10 @@ class LiteRtLmEngine @Inject constructor(
         // моделью и теми же параметрами обязан быть no-op — иначе диалог с
         // LiteRT-LM был бы невозможен. Смена модели или настроек меняет ключ.
         val key = loadKey(path, settings)
-        if (key == loadedKey && isLoaded) {
+        if (key == loadedKey && engine != null) {
+            // Conversation после прошлого хода может быть уже не alive — это
+            // нормально: reset() пересоздаст её из истории. Важен только живой
+            // Engine с загруженными весами.
             this@LiteRtLmEngine.settings = settings
             Log.d(TAG, "LiteRT-LM уже загружена ($path), переиспользуем движок")
             return@withContext
@@ -175,8 +177,62 @@ class LiteRtLmEngine @Inject constructor(
             )
         )
 
+    /**
+     * Ключ загрузки. `onBackendFallback` — колбэк, а не параметр движка, поэтому
+     * в ключ не входит: смена только обработчика ошибки перезагрузки не требует.
+     */
+    private fun loadKey(path: String, s: EngineSettings): String = listOf(
+        path,
+        s.maxContextTokens,
+        s.temperature,
+        s.topP,
+        s.topK,
+        s.maxOutputTokens,
+        s.useGpu && !gpuDisabledByFailure,
+        s.speculativeDecoding,
+        s.enableThinking
+    ).joinToString("|")
+
+    /**
+     * Обрезает историю так, чтобы она влезала в контекстное окно.
+     *
+     * Зачем: MediaPipe получает пересказ из 6 реплик, а LiteRT-LM — настоящие
+     * сообщения, то есть весь лог чата. Без обрезки длинная беседа либо вылезает
+     * за `maxNumTokens`, либо модель упирается в prefill — на Mi 11T это секунды
+     * ожидания перед каждым ответом.
+     *
+     * Режем с конца по целым парам «реплика пользователя + ответ», чтобы диалог
+     * не начинался с ответа Асуны. Резерв: системный промпт, ответ модели и
+     * служебные токены шаблона чата.
+     */
+    private fun fitHistory(history: List<Turn>, systemPrompt: String): List<Turn> {
+        val budget = settings.maxContextTokens -
+            estimateTokens(systemPrompt) -
+            settings.maxOutputTokens -
+            CONTEXT_OVERHEAD_TOKENS
+        if (budget <= 0) {
+            Log.w(
+                TAG,
+                "Контекст ${settings.maxContextTokens} токенов не вмещает даже системный промпт — история не отправляется"
+            )
+            return emptyList()
+        }
+        return fitHistoryToBudget(history, budget)
+    }
+
+    /** Оценка длины текста в токенах — общая с [estimateTokens] из OnDeviceEngine.kt. */
+    private fun estimateTokens(text: String): Int =
+        com.vectorheart.asuna.localai.estimateTokens(text)
+
     override suspend fun reset(systemPrompt: String, history: List<Turn>) = withContext(Dispatchers.Default) {
         val e = engine ?: throw IllegalStateException("Модель не загружена")
+        val kept = fitHistory(history, systemPrompt)
+        if (kept.size < history.size) {
+            Log.i(
+                TAG,
+                "История не влезает в ${settings.maxContextTokens} токенов: ${history.size} → ${kept.size} реплик"
+            )
+        }
         conversation?.close()
         conversation = e.createConversation(
             ConversationConfig(
@@ -185,7 +241,7 @@ class LiteRtLmEngine @Inject constructor(
                 systemInstruction = Contents.of(systemPrompt),
                 // История кладём настоящими сообщениями, а не пересказом прозой:
                 // это экономит токены и сохраняет роли (ТЗ п. 4.4).
-                initialMessages = history.map { turn ->
+                initialMessages = kept.map { turn ->
                     if (turn.isUser) Message.user(turn.text) else Message.model(turn.text)
                 },
                 samplerConfig = SamplerConfig(
@@ -239,6 +295,7 @@ class LiteRtLmEngine @Inject constructor(
         conversation = null
         engine = null
         loadedPath = null
+        loadedKey = null
         modelPrecision = null
     }
 
@@ -257,5 +314,8 @@ class LiteRtLmEngine @Inject constructor(
     companion object {
         private const val TAG = "LiteRtLmEngine"
         private const val TRIM_MEMORY_RUNNING_LOW = 10
+
+        /** Служебные токены чат-шаблона и запас на роли — резерв из контекста. */
+        private const val CONTEXT_OVERHEAD_TOKENS = 64
     }
 }

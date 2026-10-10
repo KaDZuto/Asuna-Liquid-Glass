@@ -28,6 +28,18 @@ class AsunaCompanionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Нехватка памяти: LiteRT-LM держит модель в нативной памяти, поэтому на
+     * нехватке её нужно отпустить, иначе система убьёт процесс. Модель
+     * поднимется заново при следующем сообщении.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::llmRepository.isInitialized) {
+            llmRepository.onTrimMemory(level)
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // TODO: поднять foreground notification, инициализировать STT/LLM/TTS,
         // запустить periodic smalltalk через WorkManager.
