@@ -146,14 +146,14 @@ class LocalModelManager @Inject constructor(
             downloadUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
         ),
         ModelRecommendation(
-            title = "Gemma 4 E2B IT — LiteRT (без логина)",
-            filename = "gemma-4-E2B-it-web.task",
+            title = "Gemma 4 E2B IT — LiteRT-LM (Web/Mobile, без логина)",
+            filename = "gemma-4-E2B-it-web.litertlm",
             sizeFormatted = "1.86 ГБ",
             ramUsage = "~2.4 ГБ RAM",
             speedMi11T = "20-30 ток/сек (очень шустро)",
             huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm",
-            description = "Google Gemma 4 нового поколения! Архитектура E2B (2B параметров), контекст до 32k. Открытая — токен HF НЕ требуется.",
-            downloadUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task",
+            description = "Google Gemma 4 нового поколения! Архитектура E2B (2B параметров), оптимизирована для мобильных устройств, контекст до 32k. Открытая — токен HF НЕ требуется.",
+            downloadUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm",
             requiresHfToken = false
         ),
         ModelRecommendation(
@@ -187,14 +187,14 @@ class LocalModelManager @Inject constructor(
             downloadUrl = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
         ),
         ModelRecommendation(
-            title = "Gemma 4 E4B IT — LiteRT (для 8GB+ RAM)",
-            filename = "gemma-4-E4B-it-web.task",
+            title = "Gemma 4 E4B IT — LiteRT-LM (для 8GB+ RAM)",
+            filename = "gemma-4-E4B-it.litertlm",
             sizeFormatted = "2.76 ГБ",
             ramUsage = "~3.8 ГБ RAM",
             speedMi11T = "10-18 ток/сек",
             huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm",
             description = "Мощная 4B модель Gemma 4 для флагманов. Глубокое понимание сложных тем и тонкого юмора. Без логина.",
-            downloadUrl = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.task",
+            downloadUrl = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
             requiresHfToken = false
         ),
         ModelRecommendation(
@@ -249,7 +249,9 @@ class LocalModelManager @Inject constructor(
     }
 
     /**
-     * Импорт .gguf файла через Android SAF (Storage Access Framework)
+     * Импорт файла модели (.task / .litertlm / .gguf) через Android SAF (Storage Access Framework).
+     * Безопасное атомарное копирование через временный .part файл, проверка дискового пространства,
+     * валидация целостности размера и определение формата по реальной сигнатуре (magic bytes).
      */
     suspend fun importModelFromUri(uri: Uri): ImportedModel = withContext(Dispatchers.IO) {
         var displayName = "model.gguf"
@@ -259,44 +261,108 @@ class LocalModelManager @Inject constructor(
             val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
             if (cursor.moveToFirst()) {
-                if (nameIndex != -1) displayName = cursor.getString(nameIndex)
+                if (nameIndex != -1) {
+                    val n = cursor.getString(nameIndex)
+                    if (!n.isNullOrBlank()) displayName = n
+                }
                 if (sizeIndex != -1) size = cursor.getLong(sizeIndex)
             }
         }
 
-        // Сохраняем модель в приватную папку models или регистрируем постоянный путь
-        val modelsDir = File(context.filesDir, "local_models").apply { mkdirs() }
-        val targetFile = File(modelsDir, displayName)
-
-        // Копируем поток из SAF в локальный файл
-        context.contentResolver.openInputStream(uri)?.use { input: InputStream ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
+        // Проверка свободного места перед копированием больших файлов
+        if (size > 0) {
+            val free = freeDiskBytes()
+            if (free in 0..(size + 50 * 1024 * 1024)) {
+                throw RuntimeException("Мало места на устройстве: нужно ~${size / 1024 / 1024} МБ, свободно ${free / 1024 / 1024} МБ")
             }
         }
 
-        val detectedFormat = when {
-            displayName.endsWith(".task", ignoreCase = true) -> "MediaPipeTask"
-            displayName.endsWith(".litertlm", ignoreCase = true) -> "LiteRT"
-            else -> "GGUF"
+        val modelsDir = File(context.filesDir, "local_models").apply { mkdirs() }
+        val partFile = File(modelsDir, "${displayName}.part")
+
+        // Копируем поток из SAF во временный файл, чтобы не оставлять битых файлов при сбое
+        val input = context.contentResolver.openInputStream(uri)
+            ?: throw RuntimeException("Не удалось открыть поток модели через SAF")
+
+        try {
+            input.use { inStream ->
+                java.io.FileOutputStream(partFile, false).use { outStream ->
+                    val buffer = ByteArray(128 * 1024)
+                    while (true) {
+                        val read = inStream.read(buffer)
+                        if (read < 0) break
+                        outStream.write(buffer, 0, read)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            partFile.delete()
+            throw RuntimeException("Ошибка копирования файла модели: ${e.message}", e)
         }
+
+        if (!partFile.exists() || partFile.length() < 1024) {
+            partFile.delete()
+            throw RuntimeException("Файл модели пуст или не был скопирован")
+        }
+
+        // Проверка целостности по размеру SAF
+        if (size > 0 && partFile.length() != size) {
+            val copied = partFile.length()
+            partFile.delete()
+            throw RuntimeException("Файл скопирован не полностью: ожидалось $size байт, получено $copied байт")
+        }
+
+        // Определение формата по реальным magic bytes файла
+        val detectedRuntime = EngineFactory.detectRuntimeFromFile(partFile)
+        val detectedFormat = when (detectedRuntime) {
+            EngineRuntime.LITERT_LM -> "LiteRT"
+            EngineRuntime.MEDIAPIPE_TASK -> "MediaPipeTask"
+            EngineRuntime.GGUF_TERMUX -> "GGUF"
+            null -> when {
+                displayName.endsWith(".task", ignoreCase = true) -> "MediaPipeTask"
+                displayName.endsWith(".litertlm", ignoreCase = true) -> "LiteRT"
+                else -> "GGUF"
+            }
+        }
+
+        // Нормализация имени файла: если расширение отсутствует или расходится с форматом,
+        // сохраняем с правильным суффиксом, чтобы рантайм безошибочно выбирал движок.
+        val finalFileName = when (detectedFormat) {
+            "LiteRT" -> if (!displayName.endsWith(".litertlm", ignoreCase = true)) "$displayName.litertlm" else displayName
+            "MediaPipeTask" -> if (!displayName.endsWith(".task", ignoreCase = true)) "$displayName.task" else displayName
+            "GGUF" -> if (!displayName.endsWith(".gguf", ignoreCase = true)) "$displayName.gguf" else displayName
+            else -> displayName
+        }
+
+        val targetFile = File(modelsDir, finalFileName)
+        if (targetFile.exists()) targetFile.delete()
+        if (!partFile.renameTo(targetFile)) {
+            partFile.copyTo(targetFile, overwrite = true)
+            partFile.delete()
+        }
+
+        val recContext = when (detectedFormat) {
+            "MediaPipeTask" -> EngineFactory.contextLimitFromName(finalFileName)
+            else -> 2048
+        }
+
         val model = ImportedModel(
             id = "local_${System.currentTimeMillis()}",
-            displayName = displayName.removeSuffix(".gguf").removeSuffix(".task").removeSuffix(".litertlm"),
-            fileName = displayName,
+            displayName = finalFileName.removeSuffix(".gguf").removeSuffix(".task").removeSuffix(".litertlm"),
+            fileName = finalFileName,
             filePath = targetFile.absolutePath,
             sizeBytes = targetFile.length(),
             format = detectedFormat,
-            recommendedThreads = 4, // 4 ядра Cortex-A78 на Dimensity 1200
-            recommendedContext = 2048
+            recommendedThreads = 4,
+            recommendedContext = recContext
         )
 
         val list = getImportedModels().toMutableList()
-        list.removeAll { it.fileName == displayName }
+        list.removeAll { it.fileName == finalFileName || it.filePath == targetFile.absolutePath }
         list.add(model)
         saveImportedModels(list)
 
-        Log.d(TAG, "Imported local model: ${model.displayName} (${model.sizeBytes} bytes)")
+        Log.d(TAG, "Imported local model: ${model.displayName} (${model.sizeBytes} bytes, format=$detectedFormat, file=$finalFileName)")
         model
     }
 

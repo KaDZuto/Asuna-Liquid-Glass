@@ -91,6 +91,7 @@ import androidx.core.content.ContextCompat
 import com.vectorheart.asuna.avatar.TiltSensor
 import com.vectorheart.asuna.llm.LlmClient
 import com.vectorheart.asuna.llm.LlmRepository
+import com.vectorheart.asuna.localai.EngineFactory
 import com.vectorheart.asuna.localai.LocalModelManager
 import com.vectorheart.asuna.pickup.PickupMode
 import com.vectorheart.asuna.stt.SttEngine
@@ -828,7 +829,8 @@ fun ChatScreen(
                         apiType = "local-ondevice"
                         baseUrl = ""
                         model = m.filePath
-                        Toast.makeText(context, "On-Device: ${m.displayName}", Toast.LENGTH_LONG).show()
+                        val engineName = if (EngineFactory.isLiteRtLm(m.filePath)) "LiteRT-LM" else "MediaPipe"
+                        Toast.makeText(context, "On-Device ($engineName): ${m.displayName}", Toast.LENGTH_LONG).show()
                     } else {
                         apiType = "openai-compatible"
                         baseUrl = "http://127.0.0.1:8080/v1"

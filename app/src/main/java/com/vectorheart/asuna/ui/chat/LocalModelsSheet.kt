@@ -208,10 +208,10 @@ fun LocalModelsSheetContent(
                                 OutlinedButton(onClick = { onActivateModel(m) }) {
                                     Text(
                                         when {
-                                            m.fileName.endsWith(".litertlm", ignoreCase = true) ->
+                                            m.fileName.endsWith(".litertlm", ignoreCase = true) || m.format == "LiteRT" ->
                                                 "🧩 В чате (LiteRT-LM)"
-                                            m.format == "MediaPipeTask" || m.format == "LiteRT" ->
-                                                "🧩 В чате (On-Device)"
+                                            m.fileName.endsWith(".task", ignoreCase = true) || m.format == "MediaPipeTask" ->
+                                                "🧩 В чате (MediaPipe)"
                                             else -> "📱 В чате (Termux)"
                                         },
                                         fontSize = 11.sp

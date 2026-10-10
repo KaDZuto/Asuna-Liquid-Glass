@@ -117,52 +117,85 @@ class LiteRtLmEngine @Inject constructor(
         close()
         this@LiteRtLmEngine.settings = settings
 
+        // Проверяем валидность контейнера до вызова нативного рантайма
+        val file = java.io.File(path)
+        if (!file.exists() || !file.isFile || file.length() < 32) {
+            throw RuntimeException("Файл модели '$path' не найден или пуст.")
+        }
+        val inspectorInfo = LiteRtLmModelInspector.inspect(path)
+        if (!inspectorInfo.formatOk) {
+            throw RuntimeException("Файл '$path' не является валидным контейнером LiteRT-LM (.litertlm) или повреждён.")
+        }
+
         // Спекулятивное декодирование — до initialize(): флаг читается при старте.
         ExperimentalFlags.enableSpeculativeDecoding = settings.speculativeDecoding
 
-        // Мультимодальность намеренно не включаем: visionBackend/audioBackend
-        // не задаём — экономим ОЗУ, которого на Mi 11T и так в обрез.
         val wantGpu = settings.useGpu && !gpuDisabledByFailure
         var created: Engine? = null
+        var lastError: Exception? = null
 
-        if (wantGpu) {
-            try {
-                created = newEngine(path, settings, Backend.GPU())
-                created.initialize()
+        // Вспомогательная функция инициализации с безопасной очисткой при ошибке
+        fun tryInit(s: EngineSettings, backend: Backend): Engine? {
+            return try {
+                val eng = newEngine(path, s, backend)
+                eng.initialize()
+                eng
             } catch (e: Exception) {
-                // GPU на Mali-G77 не проверен: откатываемся на CPU и запоминаем,
-                // чтобы не пытаться снова на каждом запуске.
-                Log.w(TAG, "GPU backend failed, fallback to CPU: ${e.message}")
+                lastError = e
+                Log.w(TAG, "Init failed on ${backend.name} (ctx=${s.maxContextTokens}): ${e.message}")
+                null
+            }
+        }
+
+        // 1. Попытка с целевым бэкендом
+        if (wantGpu) {
+            created = tryInit(settings, Backend.GPU())
+            if (created == null) {
+                Log.w(TAG, "GPU backend failed, fallback to CPU")
                 gpuDisabledByFailure = true
-                settings.onBackendFallback?.invoke(e.message ?: "GPU-бэкенд недоступен")
-                try {
-                    created?.close()
-                } catch (_: Exception) {
-                }
-                created = null
+                settings.onBackendFallback?.invoke("GPU-бэкенд недоступен, переключаемся на CPU")
+            }
+        }
+
+        // 2. Попытка на CPU
+        if (created == null) {
+            created = tryInit(settings, Backend.CPU())
+        }
+
+        // 3. Если CPU не справился (например, модель собрана под GPU/NPU), пробуем GPU
+        if (created == null && !wantGpu && !gpuDisabledByFailure) {
+            Log.i(TAG, "CPU init failed, trying GPU backend fallback...")
+            created = tryInit(settings, Backend.GPU())
+        }
+
+        // 4. Если инициализация упала из-за лимита контекста KV-кэша модели (например, ekv1280/2048),
+        // пробуем уменьшить контекст до 2048 и 1024
+        if (created == null && settings.maxContextTokens > 2048) {
+            val fallbackSettings = settings.copy(maxContextTokens = 2048)
+            Log.i(TAG, "Retrying initialization with reduced context 2048...")
+            created = tryInit(fallbackSettings, if (wantGpu) Backend.GPU() else Backend.CPU())
+                ?: tryInit(fallbackSettings, Backend.CPU())
+            if (created != null) {
+                this@LiteRtLmEngine.settings = fallbackSettings
             }
         }
 
         if (created == null) {
-            try {
-                created = newEngine(path, settings, Backend.CPU())
-                created.initialize()
-            } catch (e: Exception) {
-                Log.e(TAG, "LiteRT-LM load failed: ${e.message}", e)
-                throw RuntimeException(
-                    "Не удалось загрузить модель .litertlm: ${firstLine(e)}", e
-                )
-            }
+            val err = lastError ?: RuntimeException("Unknown engine initialization failure")
+            Log.e(TAG, "LiteRT-LM load failed completely: ${err.message}", err)
+            throw RuntimeException(
+                "Не удалось загрузить модель .litertlm: ${firstLine(err)}", err
+            )
         }
 
         engine = created
         loadedPath = path
         loadedKey = key
-        modelPrecision = LiteRtLmModelInspector.inspect(path).takeIf { it.formatOk }
+        modelPrecision = inspectorInfo
         Log.d(
             TAG,
-            "LiteRT-LM loaded: $path ctx=${settings.maxContextTokens} " +
-                "gpu=${created.engineConfig.backend.name} weights=${modelPrecision?.summary() ?: "не прочитаны"}"
+            "LiteRT-LM loaded: $path ctx=${this@LiteRtLmEngine.settings.maxContextTokens} " +
+                "backend=${created.engineConfig.backend.name} weights=${modelPrecision?.summary() ?: "не прочитаны"}"
         )
         Unit
     }

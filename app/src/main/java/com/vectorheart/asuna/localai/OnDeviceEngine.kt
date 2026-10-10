@@ -131,6 +131,45 @@ fun fitHistoryToBudget(history: List<Turn>, budgetTokens: Int): List<Turn> {
 object EngineFactory {
 
     /**
+     * Детектирует рантайм по сигнатуре (magic bytes) реального файла.
+     *  - "LITERTLM" -> LiteRT-LM (.litertlm)
+     *  - "GGUF"     -> Termux (.gguf)
+     *  - PK\x03\x04 -> MediaPipe Task bundle (ZIP-архив)
+     */
+    fun detectRuntimeFromFile(file: java.io.File): EngineRuntime? {
+        if (!file.exists() || !file.isFile || file.length() < 4) return null
+        return try {
+            file.inputStream().use { input ->
+                val buf = ByteArray(16)
+                val n = input.read(buf)
+                if (n < 4) return null
+                // 1. LiteRT-LM magic: "LITERTLM" (8 bytes)
+                if (n >= 8 && buf[0] == 'L'.code.toByte() && buf[1] == 'I'.code.toByte() &&
+                    buf[2] == 'T'.code.toByte() && buf[3] == 'E'.code.toByte() &&
+                    buf[4] == 'R'.code.toByte() && buf[5] == 'T'.code.toByte() &&
+                    buf[6] == 'L'.code.toByte() && buf[7] == 'M'.code.toByte()) {
+                    return EngineRuntime.LITERT_LM
+                }
+                // 2. GGUF magic: "GGUF" (4 bytes)
+                if (buf[0] == 'G'.code.toByte() && buf[1] == 'G'.code.toByte() &&
+                    buf[2] == 'U'.code.toByte() && buf[3] == 'F'.code.toByte()) {
+                    return EngineRuntime.GGUF_TERMUX
+                }
+                // 3. MediaPipe Task bundle: Zip archive starting with PK\x03\x04
+                // или с префиксом 4 нулевых байтов (как в некоторых сборках задач)
+                if ((buf[0] == 0x50.toByte() && buf[1] == 0x4B.toByte() && buf[2] == 0x03.toByte() && buf[3] == 0x04.toByte()) ||
+                    (n >= 8 && buf[0] == 0.toByte() && buf[1] == 0.toByte() && buf[2] == 0.toByte() && buf[3] == 0.toByte() &&
+                     buf[4] == 0x50.toByte() && buf[5] == 0x4B.toByte() && buf[6] == 0x03.toByte() && buf[7] == 0x04.toByte())) {
+                    return EngineRuntime.MEDIAPIPE_TASK
+                }
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Скомпилированный лимит контекста модели, если он зашит в имя файла.
      *
      * Разбирать имя умеет только MediaPipe: `_ekv1280.task` — это метка в
@@ -151,17 +190,29 @@ object EngineFactory {
     }
 
     /**
-     * Выбор движка по расширению файла.
+     * Выбор движка: сначала по сигнатуре/магическим байтам реального файла (если он есть на диске),
+     * затем по расширению.
      *
      * `.litertlm` -> LiteRT-LM, `.task` -> MediaPipe, `.gguf` -> Termux.
      * Неизвестное расширение — MediaPipe как historically совместимый вариант,
      * потому что старые `.task` должны работать как раньше.
      */
-    fun runtimeFor(path: String?): EngineRuntime = when (path?.substringAfterLast('.', "")?.lowercase()) {
-        "litertlm" -> EngineRuntime.LITERT_LM
-        "gguf" -> EngineRuntime.GGUF_TERMUX
-        "task" -> EngineRuntime.MEDIAPIPE_TASK
-        else -> EngineRuntime.MEDIAPIPE_TASK
+    fun runtimeFor(path: String?): EngineRuntime {
+        if (path.isNullOrBlank()) return EngineRuntime.MEDIAPIPE_TASK
+        try {
+            val file = java.io.File(path)
+            if (file.exists() && file.isFile) {
+                val detected = detectRuntimeFromFile(file)
+                if (detected != null) return detected
+            }
+        } catch (_: Exception) {
+        }
+        return when (path.substringAfterLast('.', "").lowercase()) {
+            "litertlm" -> EngineRuntime.LITERT_LM
+            "gguf" -> EngineRuntime.GGUF_TERMUX
+            "task" -> EngineRuntime.MEDIAPIPE_TASK
+            else -> EngineRuntime.MEDIAPIPE_TASK
+        }
     }
 
     /** Открывает ли этот движок файл вообще (false -> Termux-ветка). */

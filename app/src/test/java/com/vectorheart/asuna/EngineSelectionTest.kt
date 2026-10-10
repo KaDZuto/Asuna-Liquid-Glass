@@ -80,4 +80,36 @@ class EngineSelectionTest {
             EngineFactory.runtimeFor("gemma-4-E2B-it-web.task")
         )
     }
+
+    @Test
+    fun `реальный файл с magic bytes LITERTLM распознаётся даже без расширения`() {
+        val loader = requireNotNull(javaClass.classLoader)
+        val stream = requireNotNull(loader.getResourceAsStream("fixtures/tiny-int2.litertlm"))
+        val tempWithoutExt = java.nio.file.Files.createTempFile("bonsai-no-ext", "").toFile()
+        tempWithoutExt.deleteOnExit()
+        stream.use { input -> tempWithoutExt.outputStream().use { input.copyTo(it) } }
+
+        assertEquals(EngineRuntime.LITERT_LM, EngineFactory.runtimeFor(tempWithoutExt.absolutePath))
+        assertTrue(EngineFactory.isLiteRtLm(tempWithoutExt.absolutePath))
+    }
+
+    @Test
+    fun `реальный файл ZIP таски распознаётся по заголовку PK`() {
+        val tempZip = java.nio.file.Files.createTempFile("custom-task", ".bin").toFile()
+        tempZip.deleteOnExit()
+        tempZip.writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00))
+
+        assertEquals(EngineRuntime.MEDIAPIPE_TASK, EngineFactory.runtimeFor(tempZip.absolutePath))
+        assertFalse(EngineFactory.isLiteRtLm(tempZip.absolutePath))
+    }
+
+    @Test
+    fun `реальный файл GGUF распознаётся по заголовку GGUF`() {
+        val tempGguf = java.nio.file.Files.createTempFile("custom-gguf", ".bin").toFile()
+        tempGguf.deleteOnExit()
+        tempGguf.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+
+        assertEquals(EngineRuntime.GGUF_TERMUX, EngineFactory.runtimeFor(tempGguf.absolutePath))
+        assertFalse(EngineFactory.isSupportedOnDevice(tempGguf.absolutePath))
+    }
 }

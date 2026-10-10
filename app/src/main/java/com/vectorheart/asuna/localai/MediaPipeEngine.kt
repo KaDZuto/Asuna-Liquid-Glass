@@ -42,6 +42,7 @@ class MediaPipeEngine @Inject constructor(
     private var session: LlmInferenceSession? = null
     private var loadedPath: String? = null
     private var contextInjected = false
+    private var pendingSystemPrompt = ""
     private var maxContextTokens = 2048
 
     override val isLoaded: Boolean get() = session != null
@@ -237,6 +238,7 @@ override val loadedModelPath: String? get() = loadedPath
         inference = null
         loadedPath = null
         contextInjected = false
+        pendingSystemPrompt = ""
     }
 
     // ---- Реализация OnDeviceEngine -----------------------------------------
@@ -253,23 +255,32 @@ override val loadedModelPath: String? get() = loadedPath
 
     override suspend fun reset(systemPrompt: String, history: List<Turn>) {
         resetConversation()
+        pendingSystemPrompt = systemPrompt
+        contextInjected = false
         if (history.isNotEmpty()) {
             val recap = history.takeLast(6).joinToString("\n") { turn ->
                 (if (turn.isUser) "Пользователь: " else "Асуна: ") + turn.text.replace(Regex("\\s+"), " ").take(200)
             }
             primeWithContext("Краткий пересказ предыдущей беседы:\n$recap")
         }
-        // Системный промпт MediaPipe подаётся отдельным addQueryChunk в chat(),
-        // здесь только запоминаем его через contextInjected-флаг.
-        if (systemPrompt.isNotBlank()) {
-            @Suppress("unused")
-            val ignored = systemPrompt
-        }
     }
 
     override fun stream(userText: String): Flow<String> = callbackFlow {
         val s = session ?: throw IllegalStateException("On-device модель не загружена")
         try {
+            if (!contextInjected && pendingSystemPrompt.isNotBlank()) {
+                val sysTokens = countTokens(pendingSystemPrompt)
+                val safePrompt = if (maxContextTokens > 0 && sysTokens >= maxContextTokens - 150) {
+                    Log.w(TAG, "System prompt ($sysTokens tokens) too close to limit ($maxContextTokens). Trimming prompt.")
+                    pendingSystemPrompt.take((maxContextTokens * 2).coerceAtLeast(300))
+                } else {
+                    pendingSystemPrompt
+                }
+                s.addQueryChunk(safePrompt)
+                contextInjected = true
+            }
+            s.addQueryChunk(userText)
+
             val collected = StringBuilder()
             val future = s.generateResponseAsync(ProgressListener<String> { partial, _ ->
                 if (!partial.isNullOrEmpty()) {
