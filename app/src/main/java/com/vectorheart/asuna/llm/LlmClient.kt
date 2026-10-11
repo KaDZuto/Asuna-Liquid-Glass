@@ -177,6 +177,28 @@ class LlmClient @Inject constructor(
         }
     }
 
+    /**
+     * Сообщения для OpenAI-совместимых провайдеров.
+     *
+     * Пустой системный промпт не добавляется отдельным `system`-сообщением:
+     * модель, обученная работать без промпта (см. режим обученной модели в
+     * `LlmRepository`), не должна получать пустой блок — часть провайдеров на
+     * него отвечает ошибкой валидации, а некоторые ломают шаблон чата.
+     */
+    internal fun buildChatMessages(
+        systemPrompt: String,
+        history: List<Pair<String, String>>,
+        userMessage: String
+    ): JsonArray = buildJsonArray {
+        if (systemPrompt.isNotBlank()) {
+            add(buildJsonObject { put("role", "system"); put("content", systemPrompt) })
+        }
+        history.forEach { (role, content) ->
+            add(buildJsonObject { put("role", role); put("content", content) })
+        }
+        add(buildJsonObject { put("role", "user"); put("content", userMessage) })
+    }
+
     private fun callOpenAICompatible(
         userMessage: String,
         history: List<Pair<String, String>>,
@@ -219,13 +241,7 @@ class LlmClient @Inject constructor(
 
         val finalModel = if (model.isNullOrBlank()) defaultModel else model
 
-        val messages = buildJsonArray {
-            add(buildJsonObject { put("role", "system"); put("content", sys) })
-            history.forEach { (role, content) ->
-                add(buildJsonObject { put("role", role); put("content", content) })
-            }
-            add(buildJsonObject { put("role", "user"); put("content", userMessage) })
-        }
+        val messages = buildChatMessages(sys, history, userMessage)
 
         val body = buildJsonObject {
             put("model", finalModel)
@@ -318,7 +334,8 @@ class LlmClient @Inject constructor(
         val body = buildJsonObject {
             put("model", if (model.isNullOrBlank()) "claude-sonnet-5-5" else model)
             put("max_tokens", 800)
-            put("system", sys)
+            // Режим обученной модели: системный промпт пуст — поле не отправляем.
+            if (sys.isNotBlank()) put("system", sys)
             put("messages", messages)
         }
 
@@ -368,7 +385,6 @@ class LlmClient @Inject constructor(
         val userParts = buildJsonArray {
             add(buildJsonObject { put("text", userMessage) })
         }
-        val sysParts = buildJsonArray { add(buildJsonObject { put("text", sys) }) }
 
         val contents = buildJsonArray {
             history.forEach { (role, content) ->
@@ -381,7 +397,16 @@ class LlmClient @Inject constructor(
         }
 
         val body = buildJsonObject {
-            put("system_instruction", buildJsonObject { put("parts", sysParts) })
+            // Режим обученной модели: пустой system_instruction Gemini отвергает,
+            // поэтому при пустом промпте поле не добавляем.
+            if (sys.isNotBlank()) {
+                put(
+                    "system_instruction",
+                    buildJsonObject {
+                        put("parts", buildJsonArray { add(buildJsonObject { put("text", sys) }) })
+                    }
+                )
+            }
             put("contents", contents)
             put("generationConfig", buildJsonObject {
                 put("maxOutputTokens", 800)

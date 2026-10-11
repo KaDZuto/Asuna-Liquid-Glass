@@ -7,6 +7,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.vectorheart.asuna.llm.LlmClient
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class LlmClientParseTest {
 
@@ -159,5 +161,30 @@ class LlmClientParseTest {
             "в промпте есть пример описания действия в звёздочках",
             !LlmClient.BASE_SYSTEM_PROMPT.contains("*улыб")
         )
+    }
+
+    /**
+     * Режим обученной модели: системный промпт пуст, поэтому system-сообщения
+     * в запросе быть не должно — часть провайдеров на пустой блок ругается.
+     */
+    @Test
+    fun `пустой системный промпт не добавляет system-сообщение`() {
+        val messages = client.buildChatMessages("", listOf("user" to "привет"), "как дела?")
+        assertEquals(2, messages.size)
+        assertEquals("user", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("привет", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals("user", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("как дела?", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
+    }
+
+    /** Обычный режим: системный промпт идёт первым сообщением с ролью system. */
+    @Test
+    fun `непустой системный промпт идёт первым system-сообщением`() {
+        val messages = client.buildChatMessages("ты Асуна", emptyList(), "привет")
+        assertEquals(2, messages.size)
+        assertEquals("system", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("ты Асуна", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals("user", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("привет", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
     }
 }

@@ -43,7 +43,44 @@ class LlmRepository @Inject constructor(
         private const val TAG = "LlmRepository"
         const val MODE_COMPANION = "companion"
         const val MODE_PICKUP = "pickup"
+
+        /** Настройки приложения (личность, имя пользователя и т.п.). */
+        private const val PREFS = "asuna_settings"
+
+        /**
+         * Флаг «режим обученной модели»: пользователь сам дообучил модель
+         * нужному характеру и формату ответа, поэтому системный промпт ей не
+         * нужен вовсе. Хранится в тех же настройках, что и личность.
+         */
+        const val PREF_TRAINED_MODEL_MODE = "trained_model_mode"
+
+        /**
+         * Системный промпт для запроса.
+         *
+         * [trainedMode] — модель обучена сама и промпт ей не нужен: возвращаем
+         * пустую строку, то есть не отправляем ничего (ни личность, ни формат
+         * `<live2d>`, ни инструменты). Промпты переданы лямбдами, чтобы в этом
+         * режиме не собирать память, инструменты и дату зря.
+         */
+        fun selectSystemPrompt(
+            trainedMode: Boolean,
+            liteMode: Boolean,
+            fullPrompt: () -> String,
+            litePrompt: () -> String
+        ): String = when {
+            trainedMode -> ""
+            liteMode -> litePrompt()
+            else -> fullPrompt()
+        }
     }
+
+    /**
+     * Включён ли режим обученной модели: тогда системный промпт не отправляется
+     * ни облачным, ни локальным движкам.
+     */
+    fun isTrainedModelMode(): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(PREF_TRAINED_MODEL_MODE, false)
 
     /**
      * Выбор движка по расширению файла (ТЗ Фаза 1, п. 3.2):
@@ -236,9 +273,17 @@ class LlmRepository @Inject constructor(
     ): LlmClient.ParseResult = withContext(Dispatchers.IO) {
         val isOnDevice = apiType.equals("local-ondevice", ignoreCase = true)
         val isLite = isOnDevice && localModelManager.isLiteLlmEnabled
-        val sysPrompt = if (isLite) buildLiteSystemPrompt() else buildSystemPrompt()
+        // Режим обученной модели: не отправляем системный промпт вообще —
+        // модель дообучена на нужный характер и формат ответа.
+        val trainedMode = isTrainedModelMode()
+        val sysPrompt = selectSystemPrompt(
+            trainedMode = trainedMode,
+            liteMode = isLite,
+            fullPrompt = { buildSystemPrompt() },
+            litePrompt = { buildLiteSystemPrompt() }
+        )
 
-        Log.d(TAG, "Calling LLM: '$userText' [mode=$currentMode, provider=$apiType, lite=$isLite]")
+        Log.d(TAG, "Calling LLM: '$userText' [mode=$currentMode, provider=$apiType, lite=$isLite, trained=$trainedMode]")
         val firstRaw = if (isOnDevice) {
             val path = model?.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("Не выбрана on-device модель (Настройки → Локальные модели)")

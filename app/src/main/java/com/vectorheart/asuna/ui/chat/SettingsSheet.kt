@@ -102,6 +102,9 @@ fun SettingsSheetContent(
     val prefs = remember { context.getSharedPreferences("asuna_settings", Context.MODE_PRIVATE) }
     var personaUserName by remember { mutableStateOf(prefs.getString("persona_user_name", "") ?: "") }
     var personaExtra by remember { mutableStateOf(prefs.getString("persona_extra", "") ?: "") }
+    var trainedModelMode by remember {
+        mutableStateOf(prefs.getBoolean("trained_model_mode", false))
+    }
 
     Column(
         modifier = Modifier
@@ -346,6 +349,35 @@ fun SettingsSheetContent(
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 3
                 )
+                Spacer(Modifier.height(10.dp))
+
+                // Режим обученной модели: системный промпт не отправляется вообще.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "🎓 Режим обученной модели",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = Color(0xFFF5EBE0)
+                        )
+                        Text(
+                            "Для моделей, которые вы дообучили сами: системный промпт не отправляется вообще (ни личность, ни формат, ни инструменты). Модель уже умеет вести себя как надо.",
+                            fontSize = 10.sp,
+                            color = Color(0xFFC9BCB0)
+                        )
+                    }
+                    Switch(
+                        checked = trainedModelMode,
+                        onCheckedChange = {
+                            trainedModelMode = it
+                            prefs.edit().putBoolean("trained_model_mode", it).apply()
+                        }
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
 
                 Row(
