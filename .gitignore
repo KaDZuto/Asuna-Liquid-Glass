@@ -18,3 +18,8 @@ local.properties
 *.salive
 __pycache__/
 *.pyc
+
+# Подпись release: ключ и пароли НЕ хранятся в git (копия — в Google Drive)
+/keystore.properties
+*.jks
+*.keystore

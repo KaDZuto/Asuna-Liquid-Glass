@@ -17,6 +17,15 @@ if (localPropertiesFile.exists()) {
 }
 val openRouterApiKey: String = localProperties.getProperty("openrouter.api.key", "")
 
+// Ключ подписи release: файл keystore.properties в корне проекта (в git не хранится).
+// Если файла нет, release собирается без подписи (unsigned).
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+
 // Включаем google-services только если пользователь положил свой google-services.json
 if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
@@ -35,8 +44,8 @@ android {
         applicationId = "com.vectorheart.asuna.liquidglass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 5
+        versionName = "1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -50,9 +59,23 @@ android {
         buildConfigField("String", "OPENROUTER_API_KEY", "\"${openRouterApiKey}\"")
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseKeystore) {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile", "release.jks"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
