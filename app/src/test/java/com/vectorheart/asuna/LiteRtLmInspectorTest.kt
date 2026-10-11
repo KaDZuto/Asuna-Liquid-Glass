@@ -23,12 +23,14 @@ import java.nio.file.Files
  */
 class LiteRtLmInspectorTest {
 
-    private fun fixture(): File {
+    private fun fixture(): File = fixture("tiny-int2.litertlm")
+
+    private fun fixture(name: String): File {
         val loader = requireNotNull(javaClass.classLoader)
-        val stream = requireNotNull(loader.getResourceAsStream("fixtures/tiny-int2.litertlm")) {
-            "фикстура fixtures/tiny-int2.litertlm не на classpath"
+        val stream = requireNotNull(loader.getResourceAsStream("fixtures/$name")) {
+            "фикстура fixtures/$name не на classpath"
         }
-        val out = Files.createTempFile("tiny-int2", ".litertlm")
+        val out = Files.createTempFile(name.removeSuffix(".litertlm"), ".litertlm")
         stream.use { input -> Files.copy(input, out, java.nio.file.StandardCopyOption.REPLACE_EXISTING) }
         return out.toFile()
     }
@@ -129,5 +131,48 @@ class LiteRtLmInspectorTest {
         // в .litertlm невозможна, а троичная {-a,0,+a} — это ровно INT2.
         assertEquals(2, LiteRtLmModelInspector.inspect(fixture().path).smallestWeightBits)
         assertTrue(LiteRtLmModelInspector.inspect(fixture().path).hasInt2Weights)
+    }
+
+    // --- Метаданные секций: model_type / backend_constraint ------------------
+    // Фикстуры `header-*.litertlm` собраны тем же flatbuffers-билдером, что и
+    // настоящие бандлы (проверено на gemma-4-E2B-it-web, Qwen3-0.6B и др.):
+    // значения взяты из реальных контейнеров.
+
+    @Test
+    fun `читает model_type и backend_constraint из секций`() {
+        val info = LiteRtLmModelInspector.inspect(fixture("header-gpu-artisan.litertlm").path)
+        assertTrue(info.formatOk)
+        assertEquals(listOf("tf_lite_artisan_text_decoder"), info.modelTypes)
+        assertEquals(listOf("gpu_artisan"), info.backendConstraints)
+        assertTrue("gpu_artisan должен требовать GPU", info.requiresGpu)
+        assertFalse("у artisan-сборки нет tf_lite_prefill_decode", info.hasStandardTextDecoder)
+        assertEquals("gpu_artisan", info.backendSummary)
+    }
+
+    @Test
+    fun `обычная сборка с prefill_decode не требует GPU`() {
+        val info = LiteRtLmModelInspector.inspect(fixture("header-cpu-prefill.litertlm").path)
+        assertTrue(info.hasStandardTextDecoder)
+        assertFalse(info.requiresGpu)
+        assertFalse(info.vendorSpecific)
+        assertEquals(listOf("tf_lite_embedder", "tf_lite_prefill_decode"), info.modelTypes)
+    }
+
+    @Test
+    fun `vendor-сборка с tf_lite_aux помечается как чип-специфичная`() {
+        // Так устроена Qwen3-0.6B.mediatek.mt6993: tf_lite_aux + prefill_decode.
+        val info = LiteRtLmModelInspector.inspect(fixture("header-vendor-npu.litertlm").path)
+        assertTrue(info.vendorSpecific)
+        assertTrue(info.hasStandardTextDecoder)
+        assertFalse("vendor-сборка не GPU-only, просто чужая по чипу", info.requiresGpu)
+    }
+
+    @Test
+    fun `фикстура без метаданных секций не ломает разбор`() {
+        val info = LiteRtLmModelInspector.inspect(fixture().path)
+        assertTrue(info.modelTypes.isEmpty())
+        assertTrue(info.backendConstraints.isEmpty())
+        assertFalse(info.requiresGpu)
+        assertFalse(info.vendorSpecific)
     }
 }

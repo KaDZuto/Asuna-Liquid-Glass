@@ -127,10 +127,24 @@ class LiteRtLmEngine @Inject constructor(
             throw RuntimeException("Файл '$path' не является валидным контейнером LiteRT-LM (.litertlm) или повреждён.")
         }
 
+        // Часть .litertlm собрана только под GPU: у таких секций
+        // backend_constraint=gpu_artisan (веб-сборка Gemma 4), либо вообще нет
+        // обычного текстового декодера tf_lite_prefill_decode. На CPU они не
+        // поднимаются, поэтому для них сразу и принудительно идём на GPU и
+        // игнорируем прошлые неудачи GPU — иначе модель просто не запустится.
+        val gpuRequired = inspectorInfo.requiresGpu || !inspectorInfo.hasStandardTextDecoder
+        if (gpuRequired) {
+            gpuDisabledByFailure = false
+            Log.i(
+                TAG,
+                "Модель требует GPU (${inspectorInfo.backendSummary.ifBlank { "нет tf_lite_prefill_decode" }}) — старт сразу на GPU"
+            )
+        }
+
         // Спекулятивное декодирование — до initialize(): флаг читается при старте.
         ExperimentalFlags.enableSpeculativeDecoding = settings.speculativeDecoding
 
-        val wantGpu = settings.useGpu && !gpuDisabledByFailure
+        val wantGpu = (settings.useGpu && !gpuDisabledByFailure) || gpuRequired
         var created: Engine? = null
         var lastError: Exception? = null
 
@@ -150,15 +164,16 @@ class LiteRtLmEngine @Inject constructor(
         // 1. Попытка с целевым бэкендом
         if (wantGpu) {
             created = tryInit(settings, Backend.GPU())
-            if (created == null) {
+            if (created == null && !gpuRequired) {
                 Log.w(TAG, "GPU backend failed, fallback to CPU")
                 gpuDisabledByFailure = true
                 settings.onBackendFallback?.invoke("GPU-бэкенд недоступен, переключаемся на CPU")
             }
         }
 
-        // 2. Попытка на CPU
-        if (created == null) {
+        // 2. CPU — только если модель не требует GPU: иначе попытка бесполезна
+        //    и лишь съедает время, такой файл на CPU гарантированно не поднимется.
+        if (created == null && !gpuRequired) {
             created = tryInit(settings, Backend.CPU())
         }
 
@@ -169,12 +184,16 @@ class LiteRtLmEngine @Inject constructor(
         }
 
         // 4. Если инициализация упала из-за лимита контекста KV-кэша модели (например, ekv1280/2048),
-        // пробуем уменьшить контекст до 2048 и 1024
+        // пробуем уменьшить контекст до 2048
         if (created == null && settings.maxContextTokens > 2048) {
             val fallbackSettings = settings.copy(maxContextTokens = 2048)
             Log.i(TAG, "Retrying initialization with reduced context 2048...")
-            created = tryInit(fallbackSettings, if (wantGpu) Backend.GPU() else Backend.CPU())
-                ?: tryInit(fallbackSettings, Backend.CPU())
+            created = if (gpuRequired) {
+                tryInit(fallbackSettings, Backend.GPU())
+            } else {
+                tryInit(fallbackSettings, if (wantGpu) Backend.GPU() else Backend.CPU())
+                    ?: tryInit(fallbackSettings, Backend.CPU())
+            }
             if (created != null) {
                 this@LiteRtLmEngine.settings = fallbackSettings
             }
@@ -184,7 +203,7 @@ class LiteRtLmEngine @Inject constructor(
             val err = lastError ?: RuntimeException("Unknown engine initialization failure")
             Log.e(TAG, "LiteRT-LM load failed completely: ${err.message}", err)
             throw RuntimeException(
-                "Не удалось загрузить модель .litertlm: ${firstLine(err)}", err
+                "Не удалось загрузить модель .litertlm: ${loadFailureHint(inspectorInfo)}${firstLine(err)}", err
             )
         }
 
@@ -335,6 +354,24 @@ class LiteRtLmEngine @Inject constructor(
     /** Первая строка исключения — её и показываем пользователю (ТЗ п. 3.5). */
     private fun firstLine(e: Throwable): String =
         (e.message ?: e::class.java.simpleName).lineSequence().first().take(200)
+
+    /**
+     * Человеческое объяснение, почему конкретный `.litertlm` не поднялся, —
+     * чтобы пользователь не видел «tf_lite_prefill_decode not found» и не
+     * думал, что сломалось приложение.
+     */
+    private fun loadFailureHint(info: LiteRtLmModelInspector.Info): String = when {
+        info.requiresGpu ->
+            "это сборка только под GPU (backend_constraint=${info.backendSummary}), " +
+                "а GPU-бэкенд LiteRT-LM на этом устройстве не поднялся — попробуйте обычную сборку модели. "
+        info.vendorSpecific ->
+            "модель собрана под конкретный чип/NPU (есть vendor-секции: ${info.modelTypes.joinToString(", ")}), " +
+                "на этом устройстве она не запустится — возьмите универсальную сборку. "
+        !info.hasStandardTextDecoder && info.modelTypes.isNotEmpty() ->
+            "в контейнере нет стандартного текстового декодера LiteRT-LM " +
+                "(найдено: ${info.modelTypes.joinToString(", ")}). "
+        else -> ""
+    }
 
     /** Сброс памяти по запросу системы: движок держит нативные буферы. */
     fun onTrimMemory(level: Int) {

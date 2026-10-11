@@ -75,8 +75,33 @@ object LiteRtLmModelInspector {
         val weightCount: Long = 0L,
         val bitsPerWeight: Float = 0f,
         val tensorCounts: Map<String, Int> = emptyMap(),
-        val weightTypes: List<String> = emptyList()
+        val weightTypes: List<String> = emptyList(),
+        val modelTypes: List<String> = emptyList(),
+        val backendConstraints: List<String> = emptyList()
     ) {
+        /**
+         * Модель требует GPU-бэкенд: в её секциях есть `backend_constraint`
+         * с «gpu» (например, `gpu_artisan` у веб-сборок Gemma 4). На CPU такие
+         * модели не поднимаются вовсе — движок обязан стартовать на GPU.
+         */
+        val requiresGpu: Boolean
+            get() = backendConstraints.any { it.contains("gpu", ignoreCase = true) }
+
+        /** Есть ли обычный текстовый декодер LiteRT-LM (`tf_lite_prefill_decode`). */
+        val hasStandardTextDecoder: Boolean
+            get() = modelTypes.any { it == "tf_lite_prefill_decode" }
+
+        /**
+         * Модель собрана под конкретный чип/NPU: в секциях есть `tf_lite_aux`
+         * (так сделана сборка `Qwen3-0.6B.mediatek.mt6993`). Такие файлы
+         * запускаются только на «своём» SoC и на другом устройстве падают.
+         */
+        val vendorSpecific: Boolean
+            get() = modelTypes.any { it == "tf_lite_aux" }
+
+        /** Ограничения бэкенда как строка для сообщения об ошибке, напр. «gpu_artisan». */
+        val backendSummary: String get() = backendConstraints.joinToString(", ")
+
         /** Есть ли в модели 2-битные (в т.ч. троичные) веса. */
         val hasInt2Weights: Boolean get() = "INT2" in weightTypes
 
@@ -128,6 +153,7 @@ object LiteRtLmModelInspector {
         raf.seek(HEADER_BEGIN.toLong())
         raf.readFully(header)
         val ranges = tfliteSectionRanges(header)
+        val sectionMeta = readSectionMeta(header)
 
         var totalBytes = 0L
         var totalWeights = 0L
@@ -164,8 +190,49 @@ object LiteRtLmModelInspector {
             weightCount = totalWeights,
             bitsPerWeight = if (totalWeights > 0) totalBytes * 8f / totalWeights else 0f,
             tensorCounts = counts,
-            weightTypes = ordered
+            weightTypes = ordered,
+            modelTypes = sectionMeta.modelTypes,
+            backendConstraints = sectionMeta.backendConstraints
         )
+    }
+
+    /** Метаданные секций контейнера: тип модели и ограничение по бэкенду. */
+    private data class SectionMeta(
+        val modelTypes: List<String>,
+        val backendConstraints: List<String>
+    )
+
+    /**
+     * Читает `items` каждой секции заголовка и достаёт пары «ключ → значение».
+     *
+     * Раскладка сверена с настоящими бандлами (gemma-4, Qwen3, Bonsai), а не
+     * выведена из документации: у `SectionObject` поле `items` — слот 0 (вектор
+     * таблиц), у элемента `key` — слот 0 (строка), `value` — слот 2 (таблица),
+     * а внутри неё значение — слот 0 (строка). Отсюда берутся `model_type` и
+     * `backend_constraint` (`gpu_artisan` = только GPU).
+     */
+    private fun readSectionMeta(header: ByteArray): SectionMeta {
+        val fb = FlatBuffer(ArraySource(header))
+        val root = fb.root() ?: return SectionMeta(emptyList(), emptyList())
+        val sectionMeta = fb.table(root, 1) ?: return SectionMeta(emptyList(), emptyList())
+        val sections = fb.vectorStart(sectionMeta, 0) ?: return SectionMeta(emptyList(), emptyList())
+        val modelTypes = ArrayList<String>()
+        val constraints = ArrayList<String>()
+        repeat(fb.vectorLen(sectionMeta, 0)) { i ->
+            val sec = fb.tableAt(sections, i) ?: return@repeat
+            val items = fb.vectorStart(sec, 0) ?: return@repeat
+            repeat(fb.vectorLen(sec, 0)) { j ->
+                val item = fb.tableAt(items, j) ?: return@repeat
+                val key = fb.string(item, 0) ?: return@repeat
+                val valueTable = fb.table(item, 2) ?: return@repeat
+                val value = fb.string(valueTable, 0) ?: return@repeat
+                when (key) {
+                    "model_type" -> modelTypes.add(value)
+                    "backend_constraint" -> constraints.add(value)
+                }
+            }
+        }
+        return SectionMeta(modelTypes.distinct(), constraints.distinct())
     }
 
     /** Диапазоны tflite-секций в байтах файла: (begin, end). */
@@ -380,6 +447,22 @@ object LiteRtLmModelInspector {
         fun ulong(tablePos: Int, slot: Int): Long {
             val p = fieldOffset(tablePos, slot)
             return if (p == 0) 0L else long(p)
+        }
+
+        /**
+         * Строка в поле `slot`. FlatBuffers хранит строку как вектор байт с
+         * u32-длиной впереди, поэтому сначала идём по uoffset поля, затем
+         * читаем длину и символы. `null`, если поля нет или длина абсурдна.
+         */
+        fun string(tablePos: Int, slot: Int): String? {
+            val p = fieldOffset(tablePos, slot)
+            if (p == 0) return null
+            val start = p + int(p)
+            val len = int(start)
+            if (len <= 0 || len > 4096) return null
+            val sb = StringBuilder(len)
+            for (i in 0 until len) sb.append(u8(start + 4 + i).toChar())
+            return sb.toString()
         }
     }
 }

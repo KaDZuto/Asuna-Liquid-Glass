@@ -506,7 +506,7 @@ fun LocalModelsSheetContent(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("GPU-бэкенд", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFF5EBE0))
                             Text(
-                                "Быстрее, но на Mali-G77 не проверен. Если движок не поднимется, он сам вернётся на CPU.",
+                                "Быстрее. Модели «только GPU» включают его принудительно. Если GPU не поднимется, обычные модели вернутся на CPU.",
                                 fontSize = 10.sp,
                                 color = Color(0xFFB0C4DE)
                             )
@@ -572,13 +572,13 @@ fun LocalModelsSheetContent(
                 hfToken = it
                 localModelManager.hfToken = it
             },
-            label = { Text("Токен HuggingFace (необязательно, только для Gemma 3)", fontSize = 12.sp) },
+            label = { Text("Токен HuggingFace (для gated и приватных моделей)", fontSize = 12.sp) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             textStyle = MaterialTheme.typography.bodySmall
         )
         Text(
-            "Gemma 4, Qwen и Phi открыты и скачиваются БЕЗ токена. Токен нужен только для gated-модели Gemma 3.",
+            "Открытые модели качаются без токена. Токен нужен для gated-моделей (например, Gemma 3) и для приватных ссылок.",
             fontSize = 10.sp,
             color = Color(0xFFC9BCB0),
             modifier = Modifier.padding(top = 2.dp)
@@ -607,6 +607,100 @@ fun LocalModelsSheetContent(
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://huggingface.co/settings/tokens"))
                 context.startActivity(intent)
             }) { Text("Как получить", fontSize = 12.sp) }
+        }
+
+        // ===== Добавить модель по ссылке =====
+        Spacer(Modifier.height(12.dp))
+        var linkUrl by remember { mutableStateOf("") }
+        var linkName by remember { mutableStateOf("") }
+        var linkDownloading by remember { mutableStateOf(false) }
+        var linkProgress by remember { mutableStateOf<Int?>(null) }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .liquidGlassSurface(
+                    shape = RoundedCornerShape(16.dp),
+                    tintColor = LiquidGlassColors.CyberCyanTint,
+                    frostedAlpha = 0.68f,
+                    specularAlpha = 0.90f,
+                    borderWidth = 1.dp,
+                    glowColor = LiquidGlassColors.CyberCyanGlow,
+                    glowRadius = 5.dp,
+                    bounceColor = LiquidGlassColors.CyberCyanBorder.copy(alpha = 0.4f)
+                )
+                .padding(12.dp)
+        ) {
+            Column {
+                Text(
+                    "🔗 Добавить модель по ссылке",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = LiquidGlassColors.CyberCyanGlow
+                )
+                Text(
+                    "Вставьте прямую ссылку на файл (.litertlm / .task / .gguf). Ссылку Hugging Face можно копировать как есть — приложение само превратит её в прямую (blob → resolve).",
+                    fontSize = 10.sp,
+                    color = Color(0xFFB0C4DE)
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = linkUrl,
+                    onValueChange = { linkUrl = it },
+                    label = { Text("Ссылка на модель", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = linkName,
+                    onValueChange = { linkName = it },
+                    label = { Text("Имя файла (необязательно)", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+                if (linkDownloading) {
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { (linkProgress ?: 0) / 100f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("Скачивание… ${linkProgress ?: 0}%", fontSize = 11.sp, color = Color(0xFFF5EBE0))
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        enabled = linkUrl.isNotBlank() && !linkDownloading,
+                        onClick = {
+                            linkDownloading = true
+                            linkProgress = 0
+                            coroutineScope.launch {
+                                try {
+                                    val m = localModelManager.downloadFromUrl(linkUrl, linkName) { p -> linkProgress = p }
+                                    importedModels = localModelManager.getImportedModels()
+                                    Toast.makeText(context, "Скачано: ${m.displayName}. Подключаю к Асуне…", Toast.LENGTH_LONG).show()
+                                    linkUrl = ""
+                                    linkName = ""
+                                    onActivateModel(m)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+                                } finally {
+                                    linkDownloading = false
+                                    linkProgress = null
+                                }
+                            }
+                        }
+                    ) { Text(if (linkDownloading) "Скачиваем…" else "⬇ Скачать по ссылке", fontSize = 12.sp) }
+                    OutlinedButton(onClick = {
+                        val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        val text = clip?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
+                        if (!text.isNullOrBlank()) linkUrl = text.trim()
+                        else Toast.makeText(context, "Буфер обмена пуст", Toast.LENGTH_SHORT).show()
+                    }) { Text("Вставить", fontSize = 12.sp) }
+                }
+            }
         }
 
         Spacer(Modifier.height(10.dp))
@@ -643,6 +737,14 @@ fun LocalModelsSheetContent(
                     if (rec.requiresHfToken && hfToken.isBlank()) {
                         Spacer(Modifier.height(2.dp))
                         Text("⚠ Нужен токен HuggingFace", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                    if (rec.requiresGpu) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "⚡ Только GPU — на CPU не запустится, движок сам включит GPU",
+                            fontSize = 11.sp,
+                            color = LiquidGlassColors.CyberCyanGlow
+                        )
                     }
                     val isDownloading = downloading == rec.filename
                     if (isDownloading) {

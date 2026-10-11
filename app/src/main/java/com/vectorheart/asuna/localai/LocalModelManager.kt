@@ -48,7 +48,13 @@ class LocalModelManager @Inject constructor(
         val huggingFaceUrl: String,
         val description: String,
         val downloadUrl: String = "",
-        val requiresHfToken: Boolean = false
+        val requiresHfToken: Boolean = false,
+        /**
+         * Модель собранa только под GPU (`backend_constraint=gpu_artisan`).
+         * Движок принудительно стартует на GPU; на CPU такой файл падает.
+         * Флаг нужен для честного бейджа в интерфейсе.
+         */
+        val requiresGpu: Boolean = false
     )
 
     private val json = Json {
@@ -108,11 +114,18 @@ class LocalModelManager @Inject constructor(
      *
      * Сверху идут `.litertlm` — их открывает только LiteRT-LM ([LiteRtLmEngine]).
      * Ссылки и размеры сверены с HF API (файл `size` в байтах):
-     *  - `Qwen3-0.6B.mediatek.mt6993.litertlm` — 1 202 913 280 Б: сборка под
-     *    MediaTek MT6993, то есть ровно под Dimensity 1200 (Mi 11T)
-     *  - `Qwen3-0.6B.litertlm` — 614 236 160 Б: универсальный CPU-вариант
+     *  - `Qwen3-0.6B.litertlm` — 614 236 160 Б: универсальный вариант, идёт и
+     *    на CPU, и на GPU
      *  - `gemma-4-E2B-it.litertlm` — 2 588 147 712 Б: та же Gemma 4, что и .task
      *    ниже, но в родном для LiteRT-LM формате
+     *  - `gemma-4-E2B-it-web.litertlm` — 1 987 294 464 Б: собрана только под GPU
+     *    (`backend_constraint=gpu_artisan`), на CPU падает — поэтому
+     *    `requiresGpu = true`, и движок сам стартует на GPU
+     *
+     * Сборку `Qwen3-0.6B.mediatek.mt6993.litertlm` в каталоге держать нельзя:
+     * MT6993 — это **не** Dimensity 1200 (у Mi 11T MT6893), а её секции
+     * содержат vendor-`tf_lite_aux`, то есть файл работает только на «своём»
+     * MediaTek-чипе. На Mi 11T он падает с «Input tensor not found».
      */
     val onDeviceRecommendations: List<ModelRecommendation> = listOf(
         ModelRecommendation(
@@ -136,16 +149,6 @@ class LocalModelManager @Inject constructor(
             downloadUrl = "https://huggingface.co/litert-community/Ternary-Bonsai-1.7B/resolve/main/bonsai-1.7b-int2pc-4k-gpu.litertlm"
         ),
         ModelRecommendation(
-            title = "Qwen3 0.6B — LiteRT-LM, сборка под Dimensity 1200",
-            filename = "Qwen3-0.6B.mediatek.mt6993.litertlm",
-            sizeFormatted = "1.12 ГБ",
-            ramUsage = "~1.8 ГБ RAM",
-            speedMi11T = "25-35 ток/сек (очень шустро)",
-            huggingFaceUrl = "https://huggingface.co/litert-community/Qwen3-0.6B",
-            description = "Собран под MediaTek MT6993 — это именно Dimensity 1200 из Mi 11T. Лучший выбор для быстрого живого диалога.",
-            downloadUrl = "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B.mediatek.mt6993.litertlm"
-        ),
-        ModelRecommendation(
             title = "Qwen3 0.6B — LiteRT-LM, универсальный (CPU)",
             filename = "Qwen3-0.6B.litertlm",
             sizeFormatted = "586 МБ",
@@ -166,15 +169,16 @@ class LocalModelManager @Inject constructor(
             downloadUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
         ),
         ModelRecommendation(
-            title = "Gemma 4 E2B IT — LiteRT-LM (Web/Mobile, без логина)",
+            title = "Gemma 4 E2B IT — LiteRT-LM (Web/Mobile, только GPU)",
             filename = "gemma-4-E2B-it-web.litertlm",
             sizeFormatted = "1.86 ГБ",
             ramUsage = "~2.4 ГБ RAM",
             speedMi11T = "20-30 ток/сек (очень шустро)",
             huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm",
-            description = "Google Gemma 4 нового поколения! Архитектура E2B (2B параметров), оптимизирована для мобильных устройств, контекст до 32k. Открытая — токен HF НЕ требуется.",
+            description = "Компактная веб-сборка Gemma 4 E2B (2B параметров), контекст до 32k. Внимание: собрана только под GPU (backend_constraint=gpu_artisan) — движок сам включит GPU, на CPU она не запустится.",
             downloadUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm",
-            requiresHfToken = false
+            requiresHfToken = false,
+            requiresGpu = true
         ),
         ModelRecommendation(
             title = "Qwen 2.5 1.5B Instruct — q8, контекст 4096",
@@ -621,6 +625,15 @@ class LocalModelManager @Inject constructor(
                             }
                         }
                     }
+                    // Проверка целостности по Content-Length: недокачанный файл
+                    // не переименовываем — оставляем .part, чтобы следующий
+                    // запуск докачал его через Range, а не качал заново.
+                    if (fullSize > 0 && partFile.length() != fullSize) {
+                        throw RuntimeException(
+                            "Файл скачан не полностью: ожидалось ${fullSize / 1024 / 1024} МБ, " +
+                                "получено ${partFile.length() / 1024 / 1024} МБ. Повторите загрузку — она продолжится с места обрыва."
+                        )
+                    }
                     if (!partFile.renameTo(targetFile)) {
                         partFile.copyTo(targetFile, overwrite = true)
                         partFile.delete()
@@ -634,10 +647,15 @@ class LocalModelManager @Inject constructor(
             throw RuntimeException("Файл модели не загрузился (повреждённая загрузка) — попробуй ещё раз")
         }
 
-        val format = when {
-            rec.filename.endsWith(".task", ignoreCase = true) -> "MediaPipeTask"
-            rec.filename.endsWith(".litertlm", ignoreCase = true) -> "LiteRT"
-            else -> "GGUF"
+        val format = when (EngineFactory.detectRuntimeFromFile(targetFile)) {
+            EngineRuntime.LITERT_LM -> "LiteRT"
+            EngineRuntime.MEDIAPIPE_TASK -> "MediaPipeTask"
+            EngineRuntime.GGUF_TERMUX -> "GGUF"
+            null -> when {
+                rec.filename.endsWith(".task", ignoreCase = true) -> "MediaPipeTask"
+                rec.filename.endsWith(".litertlm", ignoreCase = true) -> "LiteRT"
+                else -> "GGUF"
+            }
         }
         val model = ImportedModel(
             id = "local_${rec.filename}",
@@ -654,6 +672,35 @@ class LocalModelManager @Inject constructor(
         list.add(model)
         saveImportedModels(list)
         model
+    }
+
+    /**
+     * Скачивает модель по ссылке, которую пользователь вставил вручную.
+     *
+     * Ссылка может быть страницей файла HF (`…/blob/main/x`), прямой ссылкой
+     * (`…/resolve/main/x`) или ссылкой на другой хостинг. Приведение к прямой
+     * и имя файла разбирает [HfLink]; дальше работает тот же [downloadModel],
+     * что и для каталога, — с докачкой, токеном HF и проверкой размера.
+     */
+    suspend fun downloadFromUrl(
+        rawUrl: String,
+        fileName: String? = null,
+        title: String? = null,
+        onProgress: ((Int) -> Unit)? = null
+    ): ImportedModel {
+        val url = HfLink.toDirectUrl(rawUrl)
+        val name = HfLink.fileName(url, fileName)
+        val rec = ModelRecommendation(
+            title = title?.trim()?.ifBlank { name } ?: name,
+            filename = name,
+            sizeFormatted = "—",
+            ramUsage = "—",
+            speedMi11T = "—",
+            huggingFaceUrl = url.substringBefore("/resolve/"),
+            description = "Модель, добавленная по ссылке.",
+            downloadUrl = url
+        )
+        return downloadModel(rec, onProgress)
     }
 
     fun removeModel(id: String) {
